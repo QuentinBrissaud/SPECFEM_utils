@@ -7,15 +7,13 @@ import sys
 from obspy.geodetics.base import gps2dist_azimuth, kilometer2degrees
 from scipy import interpolate
 import matplotlib.pyplot as plt
-from scipy.interpolate import griddata
+from scipy.interpolate import griddata, interp1d
 import fluids
-from obspy.core.utcdatetime import UTCDateTime
 from pyrocko import moment_tensor as mtm
 import pickle
 
 ## Custom libraries
-import construct_atmospheric_model, collect_topo
-#import create_mesh_gmsh
+import construct_atmospheric_model, collect_topo, create_mesh_gmsh
 
 try:
     import collect_ECMWF
@@ -25,6 +23,10 @@ except:
     imported_ECMWF = True
     
 def write_params(file, params):
+
+    """
+    Write SPECFEM input parameter file
+    """
     
     ## Open file and temporary file
     file_r = open(file, 'r')
@@ -70,18 +72,31 @@ def write_params(file, params):
     
 def load_params(file):
 
+    """
+    Load SPECFEM input parameter file
+    """
+
     params = pd.read_csv(file, engine='python', delimiter=' *= *', comment='#', skiprows=[0,1,2,3,8,12])
     params.columns = ['param', 'value']
     params.set_index('param', inplace=True)
     return params
  
 def load_stations(file):
+
+    """
+    Load SPECFEM station file
+    """
     
     stations = pd.read_csv(file, engine='python', delim_whitespace=True, header=None)
     stations.columns = ['name', 'array', 'x', 'z', 'd0', 'd1']
     return stations
  
 def compute_distance(x, source_latlon):
+
+    """
+    Compute cartesian distance between a source and a station
+    """
+
     if x['coordinates'] == 'latlon':
         distance = gps2dist_azimuth(source_latlon[0], source_latlon[1], x['lat'], x['lon'])
         x['x']   = distance[0]
@@ -94,6 +109,10 @@ def compute_distance(x, source_latlon):
     return x
  
 def correct_coordinates_stations(input_station, source_latlon):
+
+    """
+    Convert latitude/longitude coordinates into SPECFEM-readable cartesian coordinates
+    """
     
     filter = input_station.loc[(input_station['coordinates'] == 'latlon'), :]
     if source_latlon:
@@ -110,14 +129,17 @@ def correct_coordinates_stations(input_station, source_latlon):
     return input_station
  
 def build_stations(stations, input_station):
+
+    """
+    Convert user-provided station dictionnary into DataFrame
+    """
     
     default_entry = {}
     for key in stations.columns:
         default_entry[key] = '0'
     
-    
     new_stations = pd.DataFrame(columns=stations.columns)
-    for istation, station in input_station.iterrows():
+    for _, station in input_station.iterrows():
         new_entry = default_entry.copy()
         for key in station.keys():
             new_entry[key] = station[key]
@@ -129,6 +151,10 @@ def build_stations(stations, input_station):
  
 def create_station_file(simulation):
 
+    """
+    Create SPECFEM station file from a station DataFrame
+    """
+
     stations = simulation.stations
     file     = simulation.station_file
     format_station = ['name', 'array', 'x', 'z', 'd0', 'd1']
@@ -136,8 +162,12 @@ def create_station_file(simulation):
  
 def get_name_new_folder(dir_new_folder, template):
 
+    """
+    Get name of new simulation folder based on template and existing simulation folders
+    """
+
     max_no = -1
-    for  subdir, dirs, files in os.walk(dir_new_folder):
+    for  subdir, _, _ in os.walk(dir_new_folder):
         try:
             no = int(subdir.split('_')[-1])
         except:
@@ -151,6 +181,10 @@ def get_name_new_folder(dir_new_folder, template):
     return dir_new_folder + template.format(no=str(max_no+1))
         
 def copy_sample(dir_new_folder, dir_sample, template):
+
+    """
+    Copy sample simulation folder to get new simulation folder
+    """
         
     new_folder = get_name_new_folder(dir_new_folder, template)
     loc_dict = {
@@ -163,6 +197,10 @@ def copy_sample(dir_new_folder, dir_sample, template):
     return new_folder
  
 def update_params(params, input_dict):
+
+    """
+    Update SPECFEM parameter file based on user-provided input parameters
+    """
 
     dict_conversion = {
         True: '.true.',
@@ -180,12 +218,26 @@ def update_params(params, input_dict):
             params.loc[key] = input_dict[key]
         
 def create_params_file(simulation):
+
+    """
+    Create SPECFEM parameter file from user provided inputs
+    """
+
     write_params(simulation.params_file, simulation.params)
 
 def create_source_file(simulation):
+
+    """
+    Create SPECFEM source file from user provided inputs
+    """
+
     write_params(simulation.source_file, simulation.source)
 
 def get_points_towards_ref_station(source_latlon, ref_station, offset_xmin, offset_xmax, N=100):
+
+    """
+    Find station coordinates between a source and a reference station
+    """
 
     x = [source_latlon[1], ref_station['lon']]    
     y = [source_latlon[0], ref_station['lat']]
@@ -201,8 +253,12 @@ def get_points_towards_ref_station(source_latlon, ref_station, offset_xmin, offs
     
     return new_lon, new_lat
     
-def get_interface(simulation_domain, input_stations, file_interface, offset_xmin=10000., offset_xmax=10000., force_topo_at_zero=False):
+def get_interface(simulation_domain, input_stations, offset_xmin=10000., offset_xmax=10000., force_topo_at_zero=False):
     
+    """
+    Create SPECFEM interface input data for parameter and interface files
+    """
+
     ## Simulation domain dimension
     dx = simulation_domain['dx']
     xmin, xmax = -offset_xmin, input_stations.x.max() + offset_xmax
@@ -212,9 +268,7 @@ def get_interface(simulation_domain, input_stations, file_interface, offset_xmin
     xmin, xmax = xx.min(), xx.max()
     zmin, zmax = zz.min(), zz.max()
     
-    ## Vertical structure
-    #N_layers = 2
-    #vertical_points = np.linspace(zmin, zmax, N_layers+1)
+    ## Vertical structur
     vertical_points = np.array([zmin, 0., zmax])
     vertical_points_new, ivertical_points_new = [], []
     for z in vertical_points:
@@ -230,6 +284,10 @@ def get_interface(simulation_domain, input_stations, file_interface, offset_xmin
     return vertical_points_new, layers, SEM_layers, xmin, xmax, len(xx)
 
 def create_interface_file(simulation):
+
+    """
+    Create SPECFEM interface file
+    """
 
     file_format = [
         '# Number of interfaces:',
@@ -294,7 +352,7 @@ def create_interface_file(simulation):
         
     ## Create layer text
     SEM_interface = []
-    for ilayer, layer in enumerate(layers):
+    for ilayer, _ in enumerate(layers):
         loc_dict = {
             'no': ilayer,
             'nb_SEM': SEM_layers[ilayer],
@@ -320,8 +378,12 @@ def create_interface_file(simulation):
     
 def add_topography(domain, source_latlon, ref_station, dx, offset_xmin=10000., offset_xmax=10000., 
                    interpolation_method='cubic', low_pass_topography=True,
-                   N_discretization_topo=1000, factor_smoothing=1, 
-                   add_topography=True):
+                   N_discretization_topo=10000, factor_smoothing=10, 
+                   add_topography=True, topography_data=None):
+
+    """
+    Interpolate interface along source-reference station profile
+    """
 
     if not source_latlon:
         sys.exit('Cannot build topography from ETOPO without lat/lon coordinates for source and stations.')
@@ -337,18 +399,27 @@ def add_topography(domain, source_latlon, ref_station, dx, offset_xmin=10000., o
     options['region']['lon-min'] -= kilometer2degrees(2.*offset_xmin/1e3)
     options['region']['lon-max'] += kilometer2degrees(2.*offset_xmax/1e3)
     if add_topography:
-        topography = collect_topo.collect_region(options)
-        lat, lon = np.meshgrid(topography['latitude'], topography['longitude'])
-        topo     = topography['topo'].T.ravel()
-        points   = np.c_[lon.ravel(), lat.ravel()]
+        if topography_data is None:
+            topography = collect_topo.collect_region(options)
+            lat, lon = np.meshgrid(topography['latitude'], topography['longitude'])
+            topo     = topography['topo'].T.ravel()
+            points   = np.c_[lon.ravel(), lat.ravel()]
+        else:
+            points, topo = topography_data[['lon', 'lat']].values, topography_data.topo.values
         
     ## Interpolation
     if not add_topography:
         topo_interp = new_lon*0.
+    elif np.diff(new_lat).max() == 0:
+        f = interp1d(points[:,0], topo)
+        topo_interp = f(new_lon)
+    elif np.diff(new_lon).max() == 0:
+        f = interp1d(points[:,1], topo)
+        topo_interp = f(new_lat)
     else:
         topo_interp = griddata(points, topo, (new_lon, new_lat), method=interpolation_method)
-        topo_interp[np.isnan(topo_interp)] = 0. # Remove nan
-    
+    topo_interp[np.isnan(topo_interp)] = 0. # Remove nan
+
     distance = []
     gps_ref = gps2dist_azimuth(source_latlon[0], source_latlon[1], 
                                ref_station['lat'], ref_station['lon'])
@@ -366,31 +437,30 @@ def add_topography(domain, source_latlon, ref_station, dx, offset_xmin=10000., o
     idx_sort = np.argsort(distance)
     distance = distance[idx_sort]
     topo_interp = topo_interp[idx_sort]
-        
+    
     ## Smooth out topography
     if low_pass_topography:
         dx_current = abs(distance[1]-distance[0])
         if dx_current < dx:
             N_new = int(np.ceil(abs(distance[-1]-distance[0]))) / (factor_smoothing * dx)
             Navg  = int(np.ceil(N_discretization_topo/N_new))
-            #topo_interp = np.convolve(topo_interp, np.ones(Navg)/Navg, mode='same')
+            dx_new = 50e3
+            Navg = int(dx_new/dx_current)
             topo_interp_orig = topo_interp[:]
             topo_interp = np.convolve(topo_interp_orig, np.ones(Navg)/Navg, mode='valid')
-            #topo_interp = np.r_[topo_interp[0]*np.ones((Navg-1-(Navg-1)//2,)), topo_interp, topo_interp[-1]*np.ones(((Navg-1)//2,))]
-            topo_interp = np.r_[topo_interp_orig[:Navg-(Navg-1)//2], topo_interp, topo_interp_orig[-(Navg-1)//2 + 1:]]
-            if topo_interp.size > distance.size:
-                topo_interp = topo_interp[:distance.size]
+            conv_offset = (distance.size-topo_interp.size)//2
+            f = interp1d(distance[conv_offset:-conv_offset-1], topo_interp, bounds_error=False, fill_value='extrapolate')
+            topo_interp = f(distance)
         
     return distance, topo_interp
     
-def create_velocity_model(simulation, twod_output=True):
+def create_seismic_model(simulation, twod_output=True):
+
+    """
+    Create SPECFEM-readable seismic model from user provided seismic model
+    """
         
     velocity_model = simulation.velocity_model
-        
-    #if not add_attenuation:
-    #    default_attenuation = 10000.
-    #    Qs = velocity_model['Z'].values*0 + default_attenuation
-    #    Qp = velocity_model['Z'].values*0 + default_attenuation
             
     if twod_output:
         velocity_model_w = np.c_[velocity_model['distance'].values, velocity_model['depth'].values, 
@@ -407,6 +477,11 @@ def create_velocity_model(simulation, twod_output=True):
     np.savetxt(simulation.velocity_file, velocity_model_w)
     
 def get_source_latlon(input_source):
+
+    """
+    Get source geographical coordinates
+    """
+
     source_latlon = []
     if input_source['coordinates'] == 'latlon':
         source_latlon = [input_source['lat'], 
@@ -415,6 +490,10 @@ def get_source_latlon(input_source):
     return source_latlon
     
 def get_ref_station(stations, ref_station_name):
+
+    """
+    Find properties of reference station "ref_station_name"
+    """
 
     ref_station = stations.loc[stations['name'] == ref_station_name, :] 
     if len(ref_station) > 0:
@@ -425,6 +504,10 @@ def get_ref_station(stations, ref_station_name):
     return ref_station
     
 def get_domain(source_latlon, input_stations):
+
+    """
+    Get rectangular region that includes the source and the reference station
+    """
 
     domain = {
             'lat-min': 100.,
@@ -442,6 +525,10 @@ def get_domain(source_latlon, input_stations):
     return domain
     
 def add_domain_to_parfile(xmin, xmax, nx, SEM_layers, params):
+
+    """
+    Prepare spatial domain template for SPECFEM input parameter file  
+    """
     
     params.loc['xmin'] = xmin
     params.loc['xmax'] = xmax
@@ -466,6 +553,10 @@ def add_domain_to_parfile(xmin, xmax, nx, SEM_layers, params):
     params.loc['domain'] = '\n'.join(lines)
     
 def get_depths(input_velocity_model):
+
+    """
+    Get depth from thickness inputs  
+    """
     
     depths = np.cumsum(input_velocity_model.h.values)
     depths = np.concatenate(([0.], depths))
@@ -473,6 +564,10 @@ def get_depths(input_velocity_model):
     return depths
     
 def construct_velocity_model(input_velocity_model):
+
+    """
+    Load SPECFEM-readable velocity model with user provided inputs 
+    """
 
     input_velocity_model.reset_index(inplace=True, drop=True)
     depths = get_depths(input_velocity_model)
@@ -505,6 +600,10 @@ def construct_velocity_model(input_velocity_model):
     return velocity_model
     
 def load_MSISE(source_latlon, ref_station, zmax, doy, N=1000):
+
+    """
+    Build MSIS atmospheric model at the source location projected towards reference station 
+    """
         
     if not source_latlon:
         sys.exit('Source lat/lon needed to build MSISE model.')
@@ -578,6 +677,10 @@ def resample_custom_model(atmos_model, zmax, N=1000, kind='cubic'):
 
 def load_external_atmos_model(UTC_START, domain, output_dir, use_existing_external_model, dlon = 0.25, dlat = 0.25):
 
+    """
+    Load/Download ECMWF external model
+    """
+
     options = {}
     options['UTC_START_list']   = [UTC_START]
     options['REQUEST_REALTIME'] = False
@@ -597,6 +700,10 @@ def load_external_atmos_model(UTC_START, domain, output_dir, use_existing_extern
     return file
 
 def add_params_atmos_model(atmos_model, mu=1e-4, kappa=0., cp=3.5, cv=2.5):
+
+    """
+    Add default SPECFEM-required atmospheric parameters if not provided by user
+    """
     
     if not 'mu' in atmos_model.columns:
         atmos_model['mu']    = mu
@@ -736,58 +843,74 @@ def allowed_stf(type):
     else:
         return -1
     
+"""
+SPECFEM simulation preprocessing class 
+"""
 class create_simulation():
 
-    def __init__(self, options, file_pkl=''):
+    def __init__(self, specfem_folder='', sample='', template='', source=dict(), station=dict(), ref_station='', simulation_domain=dict(), add_topography=False, topography_data=pd.DataFrame(), force_topo_at_zero=False, interpolation_method_topography='linear', low_pass_topography=True, velocity_model=pd.DataFrame(), parfile=dict(), atmos_model=pd.DataFrame(), ext_mesh=dict(), file_pkl=''):
     
+        ## Load previously generated simulation class
         if file_pkl:
             file_to_load = open(file_pkl, 'rb')
-            #self = pickle.load(file_to_load)
             data = pickle.load(file_to_load)
-            options = data.options
-            #print(test.options)
-            #return
         
-        self.options = options
-        
-        self.main_folder = options['specfem_folder']
+        ## Prepare simulation folder
+        self.main_folder = specfem_folder
         if not file_pkl:
-            self.simu_folder = copy_sample(self.main_folder, options['sample'], options['template'])
+            self.simu_folder = copy_sample(self.main_folder, sample, template)
         else:
             self.simu_folder = '/'.join(file_pkl.split('/')[:-1])
             
-        self.input_source = options['source']
+        ## Source preprocessing
+        self.input_source = source
         self._update_source()
         
-        self.input_stations   = options['station']
-        self.ref_station_name = options['ref_station']
+        ## Station preprocessing
+        self.input_stations   = station
+        self.ref_station_name = ref_station
         self._update_station()
         
+        ## Moment tesnor projection
         if 'mt_coord_system' in self.input_source.keys():
             self.mt_coord_system = self.input_source['mt_coord_system']
         else:
             self.mt_coord_system = 'USE'
         self._update_moment_tensor()
         
-        self.simulation_domain = options['simulation_domain']
-        self.add_topography = options['add_topography']
+        self.simulation_domain = simulation_domain
+        self.add_topography = add_topography
+        self.topography_data = topography_data
         self.domain = get_domain(self.source_latlon, self.input_stations)
-        self.offset_xmin = options['simulation_domain']['offset_xmin']
-        self.offset_xmax = options['simulation_domain']['offset_xmax']
-        self.force_topo_at_zero = False
-        if 'force_topo_at_zero' in options:
-            self.force_topo_at_zero = options['force_topo_at_zero']
+        self.offset_xmin = self.simulation_domain['offset_xmin']
+        self.offset_xmax = self.simulation_domain['offset_xmax']
+        self.force_topo_at_zero = force_topo_at_zero
+        self.interpolation_method_topography = interpolation_method_topography
+        self.low_pass_topography = low_pass_topography
+
+        ## Prepare data for interface file
         self._update_interface()
+
+        ## Prepare external mesh
+        self.file_ext_mesh = ext_mesh['file_ext_mesh']
+        self.min_size_element = ext_mesh['min_size_element']
+        self.max_size_element_seismic = ext_mesh['max_size_element_seismic']
+        self.max_size_element_atmosphere = ext_mesh['max_size_element_atmosphere']
+        self._update_external_mesh()
         
-        self.input_velocity_model = options['velocity_model']
+        ## Prepare data for velocity file
+        self.input_velocity_model = velocity_model
         self._update_velocity()
         
-        self.input_parfile = options['parfile']
+        ## Prepare data for parameter file
+        self.input_parfile = parfile
         self._update_parfile()
         
-        self.input_atmos_model = options['atmos_model']
+        ## Prepare data for atmospheric file
+        self.input_atmos_model = atmos_model
         self._update_atmos()
         
+        ## Plot simulation domain if folder wasn't already created
         if not file_pkl:
             file = self.simu_folder + '/simulation_domain.png'
             plot_simulation_domain(self, file)
@@ -841,19 +964,50 @@ class create_simulation():
         self.stations = build_stations(self.stations, self.input_stations)  
         self.ref_station = get_ref_station(self.stations, self.ref_station_name)
         
+    def _update_external_mesh(self):
+
+        mesh = dict(
+            xtopo = self.distance,
+            topo = self.topography, 
+            xmin = self.distance.min(), 
+            xmax = self.distance.max(), 
+            zmin = np.min(self.vertical_points_new), 
+            zmax = np.max(self.vertical_points_new)
+        )
+        opt_gmsh = dict(
+            min_size_element = self.min_size_element, 
+            max_size_element_seismic = self.max_size_element_seismic, 
+            max_size_element_atmosphere = self.max_size_element_atmosphere, 
+        )
+        _ = create_mesh_gmsh.create_mesh_file_gmsh(self.file_ext_mesh, **mesh, **opt_gmsh)
+
+        bp()
+
     def _update_interface(self):
+
+        """
+        Prepare data for SPEFEM parameter file
+        """
         
         self.interface_file = self.simu_folder + '/interfaces_input'
         
         ## If requested, we modify solid-fluid interface to add topography
-        self.distance, self.topography = add_topography(self.domain, self.source_latlon, self.ref_station, self.simulation_domain['dx'], offset_xmin=self.offset_xmin, offset_xmax=self.offset_xmax, interpolation_method='linear', low_pass_topography=True, add_topography=self.add_topography)
+        opt_topo = dict(
+            offset_xmin=self.offset_xmin, 
+            offset_xmax=self.offset_xmax, 
+            interpolation_method=self.interpolation_method_topography, 
+            low_pass_topography=self.low_pass_topography, 
+            add_topography=self.add_topography, 
+            topography_data=self.topography_data
+        )
+        self.distance, self.topography = add_topography(self.domain, self.source_latlon, self.ref_station, self.simulation_domain['dx'], **opt_topo)
     
         self.stations, self.ref_station = update_params_with_topography(self.source, self.stations, self.ref_station_name, self.distance, self.topography)
         
         self.vertical_points_new, self.layers, self.SEM_layers, \
             self.xmin, self.xmax, self.nx = get_interface(self.simulation_domain, self.input_stations, 
-                                                          self.interface_file, offset_xmin=self.offset_xmin, offset_xmax=self.offset_xmax, force_topo_at_zero=self.force_topo_at_zero)
-                                                          
+                                                          offset_xmin=self.offset_xmin, offset_xmax=self.offset_xmax, force_topo_at_zero=self.force_topo_at_zero)
+                             
         if not self.add_topography:
             self.topography += self.vertical_points_new[1]
             self.stations, self.ref_station = update_params_with_topography(self.source, self.stations, self.ref_station_name, self.distance, self.topography)
@@ -998,17 +1152,21 @@ def plot_simulation_domain(simulation, file):
     cmap_acoustic = plt.get_cmap('plasma')
     cmap_ = plt.get_cmap('gist_earth_r')
     cmap_seismic = truncate_colormap(cmap_, 0.1, 0.8)
-
-    fig, axs = plt.subplots(2, 1)
-    fig.set_canvas(plt.gcf().canvas)
-    
-    name_simu = simulation.simu_folder.split('/')[-1]
-    axs[0].set_title(name_simu)
     
     source = simulation.source
     stations = simulation.stations
     distance   = simulation.distance
     topography = simulation.topography
+
+    fig = plt.figure(figsize=(10,5))
+    grid = fig.add_gridspec(2, 1)
+    #fig.set_canvas(plt.gcf().canvas)
+
+    ## Acoustic medium
+    axs = []
+    axs.append( fig.add_subplot(grid[0, 0]) )
+    name_simu = simulation.simu_folder.split('/')[-1]
+    axs[0].set_title(name_simu)
     
     atmos   = simulation.atmos_model
     x = np.array([distance.min(), 0., distance.max()])
@@ -1019,7 +1177,6 @@ def plot_simulation_domain(simulation, file):
     wx = atmos['wx'].values.reshape(len(atmos), 1) # assumes range independence
     c  = atmos['c'].values.reshape(len(atmos), 1) # assumes range independence
     color = np.c_[-wx+c, wx+c, wx+c]
-    
     
     sc = axs[0].pcolormesh(x, z, color/1e3, zorder=1, cmap=cmap_acoustic)
     axs[0].set_ylabel('Altitude (km)')
@@ -1032,10 +1189,15 @@ def plot_simulation_domain(simulation, file):
     cbar0 = plt.colorbar(sc, cax=axins0, extend='both')
     cbar0.ax.set_ylabel('Effective veloc. (km/s)', rotation=270, labelpad=16)
     
-    
+    ## Seismic medium
+    axs.append( fig.add_subplot(grid[1, 0], sharex=axs[-1]) )
     max_depth = 100000.
     seismic = simulation.velocity_model
     seismic = seismic.loc[seismic['depth'] < max_depth, :]
+    if seismic.depth.max() < atmos['z'].max():
+        seismic_bottom = seismic.iloc[-1:].copy()
+        seismic_bottom.loc[:, 'depth'] = atmos['z'].max()
+        seismic = pd.concat([seismic, seismic_bottom])
     x_ = seismic.distance.unique()
     x  = x_.copy()
     if x_.size == 1:
@@ -1058,20 +1220,24 @@ def plot_simulation_domain(simulation, file):
     cbar1 = plt.colorbar(sc1, cax=axins1, extend='both')
     cbar1.ax.set_ylabel('Shear velocity (km/s)', rotation=270, labelpad=16)
     
-    
     ## Plot source and stations
     length_domain = distance.max() - distance.min()
     
     add_bball(source, length_domain, min(max_depth, seismic['depth'].max()), axs[1])
     axs[1].scatter(source.loc['xs'].iloc[0]/1e3, -1*source.loc['zs'].iloc[0]/1e3, c='yellow', s=200., edgecolors='black', clip_on=False, marker='*', zorder=10)
     for istation, station in stations.iterrows():
-        axs[1].scatter(station['x']/1e3, 0., c='tab:orange', s=200., edgecolors='black', clip_on=False, marker='^', zorder=10)
+        idx_medium = 1
+        if station['z'] > 0:
+            idx_medium = 0
+        axs[idx_medium].scatter(station['x']/1e3, station['z']/1e3, c='tab:orange', s=200., edgecolors='black', clip_on=False, marker='^', zorder=10)
     
+    axs[-1].set_xlim(x)
+
     fig.align_ylabels(axs)
     fig.subplots_adjust(hspace=0., right=0.85)
     
     fig.savefig(file)
-     
+
 def get_gravity_sound_speed_1976(x):
 
     """
@@ -1134,9 +1300,11 @@ def create_stations_at_given_altitude(source_dict, stations, altitudes, nb_stati
         source_loc = source_dict['lat'], source_dict['lon']
         stat_ref_loc = stations.iloc[0].lat, stations.iloc[0].lon
         wgs84_geod = Geod(ellps='WGS84')
-        l_coord = wgs84_geod.inv_intermediate(source_loc[1], source_loc[0], stat_ref_loc[1], stat_ref_loc[0], nb_stations)
+        l_coord = wgs84_geod.inv_intermediate(source_loc[1], source_loc[0], stat_ref_loc[1], stat_ref_loc[0], nb_stations-1)
         lons = np.array(l_coord.lons).astype(float)
+        lons = np.r_[lons, stat_ref_loc[1]]
         lats = np.array(l_coord.lats).astype(float)
+        lats = np.r_[lats, stat_ref_loc[0]]
         
         stations_update.loc[:, 'lat'] = lats
         stations_update.loc[:, 'lon'] = lons
@@ -1168,6 +1336,7 @@ def create_stations_along_surface(source_dict, stations, nb_stations=10, add_sei
     stat_ref_loc = stations.iloc[0].lat, stations.iloc[0].lon
     wgs84_geod = Geod(ellps='WGS84')
     l_coord = wgs84_geod.inv_intermediate(source_loc[1], source_loc[0], stat_ref_loc[1], stat_ref_loc[0], nb_stations-1)
+    
     lons = np.array(l_coord.lons).astype(float)
     lats = np.array(l_coord.lats).astype(float)
     
@@ -1241,263 +1410,3 @@ def load_stf(dt, nstep, file='/staff/quentin/Documents/Projects/Kiruna/Celso_dat
     stf['amp'] = amp
     
     return stf
-    
-     
-##########################
-if __name__ == '__main__':
-    
-    options = {}
-    options['sample']         = '/staff/quentin/Documents/Codes/specfem-dg/EXAMPLES/Ridgecrest_sample/'
-    options['specfem_folder'] = '/staff/quentin/Documents/Codes/specfem-dg/EXAMPLES/'
-    #options['sample']         = '/staff/quentin/Documents/Codes/specfem2d-dg-master/EXAMPLES/example_folder/'
-    #options['specfem_folder'] = '/staff/quentin/Documents/Codes/specfem2d-dg-master/EXAMPLES/'
-    #options['template']       = 'simulation_Kiruna_KIR_{no}'
-    options['template']       = 'simulation_Kiruna_{no}'
-    options['template']       = 'simulation_Kiruna_I37_{no}'
-    options['template']       = 'simulation_Kiruna_GCMT_{no}'
-    options['add_topography'] = False
-    #options['template']       = 'simulation_Beirut_{no}'
-    
-    file = '/staff/quentin/Documents/Projects/Kiruna/atmos_model/ATMOS_I37NO_NOPERT.dat'
-    file = '/staff/quentin/Documents/Projects/Kiruna/atmos_model/ATMOS_I37NO_PERT1D_ID1.dat'
-    #file_NCPA = '/staff/quentin/Documents/Projects/Kiruna/ray_tracing/kiruna-inversion-ARCI_6BAT7N/atmMod.met'
-    #file_NCPA = '/staff/quentin/Documents/Projects/Kiruna/ray_tracing/kiruna-inversion-ARCI_6BAT7N/atmMod.met'
-    options['atmos_model'] = {
-        'use_external_atmos_model': True,
-        'number_altitudes': 1000,
-        'custom_atmospheric_model': load_Kiruna_profiles_Alexis(file),
-        #'custom_atmospheric_model': load_Kiruna_profiles_NCPA(file_NCPA),
-        #'external_model_directory': '/staff/quentin/Documents/Codes/specfem-dg/EXAMPLES/',
-        #'use_existing_external_model': 'model_ECMWF_2020-08-04_15.00.00_33.5_49.0_13.5_36.0.nc'
-    }
-    
-    """
-    from pyrocko import moment_tensor as mtm
-    from pyrocko.plot import beachball
-    m0 = mtm.magnitude_to_moment(4.6)  # convert the mag to moment
-    dict_source = {'mnn': -0.510500*m0,'mee': 0.017000*m0,'mdd': 0.120200*m0,'mne': -1.029500*m0,'mnd': 0.021000*m0,'med': -0.805700*m0,}
-    mt = mtm.MomentTensor(**dict_source)
-    fig, ax = plt.subplots(1, 1)
-    beachball.plot_beachball_mpl(mt, ax,beachball_type='full',size=120.,position=(0.5,0.5),linewidth=1.0)
-    plt.show()
-    """
-    
-    ## Simulation parameters
-    options['parfile'] = {
-        'USE_DISCONTINUOUS_METHOD': True,
-        'ATTENUATION_VISCOELASTIC_SOLID': True,
-        'USE_LNS': False, # Only for new SPECFEM version
-        'REMOVE_DG_FLUID_TO_SOLID': False,
-        'CONSTRAIN_HYDROSTATIC': True,
-        'NPROC': 12,
-        #'NSTEP': 400000,
-        #'DT': 5e-3,
-        'NSTEP': 40000,
-        'DT': 5e-2,
-        'ABC_STRETCH_TOP': False,                # Use buffer-based stretching method on that boundary?
-        'ABC_STRETCH_LEFT': False,                # Use buffer-based stretching method on that boundary?
-        'ABC_STRETCH_BOTTOM': False,                # Use buffer-based stretching method on that boundary?
-        'ABC_STRETCH_RIGHT': False,                # Use buffer-based stretching method on that boundary?
-        'ABC_STRETCH_TOP_LBUF': 10.,                  # Length of the buffer used for the buffer-based stretching method.
-        'ABC_STRETCH_LEFT_LBUF': 10.,                    # Length of the buffer used for the buffer-based stretching method.
-        'ABC_STRETCH_BOTTOM_LBUF': 10.,                    # Length of the buffer used for the buffer-based stretching method.
-        'ABC_STRETCH_RIGHT_LBUF': 10.,                    # Length of the buffer used for the buffer-based stretching method.
-        #'DT': 1e-2,
-        'NSTEP_BETWEEN_OUTPUT_IMAGES': 500,
-        'output_wavefield_dumps': False,
-        'NSTEP_BETWEEN_OUTPUT_WAVE_DUMPS': 5000,
-        'factor_subsample_image': 1.,
-        'STACEY_ABSORBING_CONDITIONS': False,
-        'PML_BOUNDARY_CONDITIONS': True,
-        'NELEM_PML_THICKNESS': 10,
-        'time_stepping_scheme': 2,
-        # Available models.
-        #   default:     define model using nbmodels below.
-        #   ascii:       read model from ascii database file.
-        #   binary:      read model from binary database file.
-        #   external:    define model using 'define_external_model' subroutine.
-        #   legacy:      read model from 'model_velocity.dat_input'.
-        #   external_DG: read DG model from 'atmospheric_model.dat' (generated with 'utils_new/Atmospheric_Models/Earth/wrapper/msisehwm'), and other models with "Velocity and Density Models" below.
-        'MODEL': 'external_DG',
-        #'DT': 1e-2,
-        }
-      
-    """
-    options['simulation_domain'] = {
-        'z-min': -10000.,
-        'z-max': 10000.,
-        'dx': 250.,
-        'offset_x': 10000.
-        }
-    """
-    options['simulation_domain'] = {
-        'z-min': -10000.,
-        'z-max': 75000.,
-        'dx': 2000.,
-        #'dx': 150.,
-        #'dx': 150.,
-        'offset_xmin': 10000.,
-        'offset_xmax': 10000.,
-        }
-    options['simulation_domain'].update({'offset_xmin': options['simulation_domain']['dx']*50,'offset_xmax': options['simulation_domain']['dx']*50,})
-    
-    ## Create source
-    options['source'] = {
-        'coordinates': 'latlon',
-        'lat': 67.8476174327105,
-        'lon': 20.20124295920305,
-        #'zs': -10.,
-        #'zs': -750.,
-        'zs': -1000.,
-        'date': UTCDateTime(2020, 5, 18, 1, 11, 57),
-        'strike': 348.,
-        'dip': 35.,
-        'rake': 50.,
-        'mag': 4.6,
-        #'Mnn': -7.8148335e-01,
-        #'Mee': -4.9707216e-01,
-        #'Mdd': -1.0200732e+00,
-        #'Mne': -2.2230861e-01,
-        #'Mnd': 2.8923124e-02,
-        #'Med': -2.3851469e-02,
-        #'f0': 0.75,
-        #'f0': 1.,
-        'f0': 0.1,
-        'scaling': 1e8,
-        'stf': 'Gaussian',
-        'stf_data': load_stf(options['parfile']['DT'], options['parfile']['NSTEP'], file='/staff/quentin/Documents/Projects/Kiruna/Celso_data/20200518011156000_crust1se_001_stf.txt')
-        }
-
-    """
-    options['source'] = {
-        'coordinates': 'latlon',
-        'lat': 33.901389,
-        'lon': 35.519167,
-        'zs': -1.,
-        'date': UTCDateTime(2020, 8, 4, 15),
-        'strike': 348.,
-        'dip': 35.,
-        'rake': 50.,
-        'mag': 1.,
-        #'f0': 0.75,
-        'f0': 0.1,
-        'scaling': 1e8,
-        }
-    """
-    
-    ## Create stations
-    options['station'] = pd.DataFrame()
-    """
-    options['ref_station']  = 'KI'
-    station = {
-        'lat': 67.8560,
-        'lon': 20.4201,
-        'z': 10., # above topography
-        'name': 'KI',
-        'array': 'NO',
-        'coordinates': 'latlon'
-        }
-    options['station'] = options['station'].append( [station] )
-    """
-    
-    """
-    from pyproj import Geod
-    wgs84_geod = Geod(ellps='WGS84')
-    az12, az21, _ = wgs84_geod.inv(options['source']['lon'], options['source']['lat'], 69.07408, 18.60763)
-    endlon, endlat, _ = wgs84_geod.fwd(options['source']['lon'], options['source']['lat'], az12, 10000.)
-    
-    options['ref_station']  = 'test'
-    station = {
-        'lat': endlat,
-        'lon': endlon,
-        'z': 10., # above topography
-        'name': 'test',
-        'array': 'NO',
-        'coordinates': 'latlon'
-        }
-    options['station'] = options['station'].append( [station] )
-    """
-    """
-    options['ref_station']  = 'I37'
-    station = {
-        'lat': 69.07408,
-        'lon': 18.60763,
-        'z': 10., # above topography
-        'name': 'I37',
-        'array': 'NO',
-        'coordinates': 'latlon'
-        }
-    options['station'] = options['station'].append( [station] )
-    """
-    """
-    """
-    options['ref_station']  = 'LANU'
-    station = {
-        'lat': 68.04730,
-        'lon': 21.99620,
-        'z': 10., # above topography
-        'name': 'LANU',
-        'array': 'UP',
-        'coordinates': 'latlon'
-        }
-    options['station'] = options['station'].append( [station] )
-    
-    
-    """
-    station = {
-        #'lat': 69.54,
-        #'lon': 18.610000,
-        'lat': 69.54,
-        'lon': 25.51,
-        'z': 10., # above topography
-        'name': 'ARCI',
-        'array': 'NO',
-        'coordinates': 'latlon'
-        }
-    options['station'] = options['station'].append( [station] )
-    """
-    """
-    
-    station = {
-        'lat': 48.8516,
-        'lon': 13.7131,
-        'z': 5., # above topography
-        'name': 'I26DE',
-        'array': 'IM',
-        'coordinates': 'latlon'
-        }
-    options['station'] = options['station'].append( [station] )
-    """
-    options['station'] = create_stations_along_surface(options['source'], options['station'], nb_stations=10, add_seismic=True, add_array_around_station=True, dx_array=100, nb_in_array=5)
-   
-    ## Velocity model
-    """
-    options['velocity_model'] = pd.DataFrame()
-    velocity_layer = {
-        'h': 4000.,
-        'vs': 1.2,
-        'vp': 2.4,
-        'rho': 3.,
-        'Qs': 100.,
-        'Qp': 200.,
-    }
-    options['velocity_model'] = options['velocity_model'].append( [velocity_layer] )
-    """
-    seismic_model_path = '/staff/quentin/Documents/Projects/2020_FFI/fescan.tvel'
-    seismic_model_path = '/staff/quentin/Documents/Projects/2020_FFI/bergen.tvel'
-    options['velocity_model'] = load_external_seismic_model(seismic_model_path, add_graves_attenuation=False, columns=['depth', 'vp', 'vs', 'rho'], unit_depth='km')
-    seismic_model_path = '/staff/quentin/Documents/Projects/Kiruna/Celso_data/crust1se.txt'
-    #options['velocity_model'] = load_external_seismic_model(seismic_model_path, add_graves_attenuation=False, columns=['h', 'vs', 'vp', 'rho', 'Qs', 'Qp'], unit_depth='km')
-    
-    ## Create simulation
-    simulation = create_simulation(options, file_pkl='')
-    
-    create_params_file(simulation)
-    create_source_file(simulation)
-    create_station_file(simulation)
-    create_interface_file(simulation)
-    create_velocity_model(simulation)
-    create_atmos_model(simulation)
-    simulation.save_simulation_parameters()
-    
-    bp()
