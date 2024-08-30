@@ -153,8 +153,6 @@ def get_cpml_data(mesh_sets_x, mesh_sets_y, mesh_sets_xy, cell_id_offset):
 
 class Meshio2Specfem2D:
 
-    outdir = "./EXTMSH"
-
     # node ordering in meshio is the same as vtk
     # https://raw.githubusercontent.com/Kitware/vtk-examples/gh-pages/src/Testing/Baseline/Cxx/GeometricObjects/TestIsoparametricCellsDemo.png
 
@@ -193,12 +191,13 @@ class Meshio2Specfem2D:
     pml_transition_layer = True
 
 
-    def __init__(self, mesh, top_abs=False, bot_abs=True, left_abs=True, right_abs=True):
+    def __init__(self, mesh, outdir = "./EXTMSH", top_abs=False, bot_abs=True, left_abs=True, right_abs=True):
         self.top_abs = top_abs
         self.bot_abs = bot_abs
         self.left_abs = left_abs
         self.right_abs = right_abs
         self.mesh = mesh
+        self.outdir = outdir
 
         # create output directory
         import os

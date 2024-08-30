@@ -2,103 +2,38 @@
 
 ## Standard libraries
 from pdb import set_trace as bp
-import os 
 import pandas as pd
 import numpy as np
 import sys
-import matplotlib.pyplot as plt
 from obspy.core.utcdatetime import UTCDateTime
+from pyrocko import moment_tensor as pmt
 
 ## Custom library
+sys.path.append("./SPECFEM_utils/")
 import launch_SPECFEM as LS
-
-def create_sentence_from_dict(name, one_dict):
-    dict_inside = ''
-    one_key = '{key}: {value}, '
-    for key in one_dict: 
-        dict_inside += one_key.format(key=key, value=one_dict[key])
-    
-    return dict_inside
-        
-def create_text_from_parameters(mechanism, f0, stf, seismic_model, depth):
-    mechanism_txt = create_sentence_from_dict('mechanism', mechanism)
-    f0_txt = create_sentence_from_dict('f0', f0)
-    stf_txt = create_sentence_from_dict('stf', stf)
-    depth_txt = create_sentence_from_dict('depth', depth)
-    all_txt = [mechanism_txt, f0_txt, stf_txt, depth_txt, seismic_model]
-    all_txt = '\n'.join(all_txt)
-    
-    return all_txt
-
-def create_dataframe_from_parameters(mechanism, f0, stf, seismic_model, depth):
-
-    entry = {'seismic_model': seismic_model}
-    entry.update(mechanism)
-    entry.update(f0)
-    entry.update(stf)
-    entry.update(depth)
-    entry = pd.DataFrame([entry])
-    return entry
-
-def create_all_parameters(output_dir, all_parameters, template):
-
-    name = template.format(no=f'{all_parameters.no.min()}-{all_parameters.no.max()}')
-    all_parameters.reset_index(drop=True, inplace=True)
-    parameter_file = '{output_dir}/parameters_{name}.csv'.format(output_dir=output_dir, name=name)
-    all_parameters.to_csv(parameter_file, header=True, index=True)
-    print('Simulations generated:')
-    print(all_parameters)
-
-## Parameter space
-def create_parameter_space(mechanisms, f0s, stfs, dir_models, depths):
-    import itertools
-    parameter_space = []
-    parameter_space.append(mechanisms)
-    parameter_space.append(f0s)
-    parameter_space.append(stfs)
-    parameter_space.append(dir_models)
-    parameter_space.append(depths)
-    parameters = list(itertools.product(*parameter_space))
-    
-    return parameters
-
-def load_SPECFEM_profile(file, deactivate_attenuation=False):
-    
-    """
-    Read atmospheric profiles used in SPECFEM
-    """
-    
-    model = pd.read_csv(file, delim_whitespace=True, header=[0])
-    model.columns = ['z','rho','t','c','p','n/a','g','n/a.1','kappa','mu','n/a.2','v','u','w_proj[m/s]','cp','cv','gamma[1]','fr[Hz]','Svib[1]','kappa1','taus','taue','taus_new','taue_new']
-    if deactivate_attenuation:
-        model['kappa'] = 0.
-        model['mu'] = 0.
-        model['taue'] = 1.
-        model['taus'] = 1.
-
-    return model[['z', 't', 'u', 'v', 'rho', 'p', 'c', 'g', 'kappa', 'mu', 'cp', 'cv', 'taue', 'taus']]
 
 ##########################
 if __name__ == '__main__':
     
     ## 
     options = {}
-    options['specfem_folder'] = '../../EXAMPLES/'
+    options['specfem_folder'] = './'
     options['sample']         = f'{options["specfem_folder"]}example_folder/'
-    options['template']       = 'simulation_test_Celine_{no}'
+    #options['template']       = 'simulation_flores_{no}'
+    #options['template']       = 'simulation_alaska_{no}'
+    options['template']       = 'simulation_venus_{no}'
     
-    ## Topography
-    options['add_topography'] = False
-    options['force_topo_at_zero'] = True
-    
+    #####################
     ## Atmospheric models
-    atmos_file = './test_data_Venus/atmospheric_model_updated.dat'
+    atmos_file = './data_venus/atmospheric_model_updated.dat'
     options['atmos_model'] = {
         'use_external_atmos_model': True,
+        'type_external_atmos_model': 'custom',
         'number_altitudes': 1000,
-        'custom_atmospheric_model': load_SPECFEM_profile(atmos_file, deactivate_attenuation=False),
+        'custom_atmospheric_model': LS.load_SPECFEM_profile(atmos_file),
     }
-    
+
+    #############################
     ## SPECFEM default parameters 
     options['parfile'] = {
         'title': 'Venusquake simulation',
@@ -108,14 +43,14 @@ if __name__ == '__main__':
         'REMOVE_DG_FLUID_TO_SOLID': False,
         'CONSTRAIN_HYDROSTATIC': True,
         'DEACTIVATE_SEISMIC_AFTER_T': True,
-        'timeval_max_elastic': 40.,
+        'timeval_max_elastic': 400.,
         'velocity_mesh': 340.,
         'size_active_mesh': 100.,
         'x0_init_active_mesh': 0.,
         'activate_moving_mesh': False,
-        'NPROC': 60,
-        'NSTEP': 100000,
-        'DT': 1.5e-3,
+        'NPROC': 200,
+        'NSTEP': 1000000,
+        'DT': 2.5e-3,
         'ABC_STRETCH_TOP': True,                # Use buffer-based stretching method on that boundary?
         'ABC_STRETCH_LEFT': True,                # Use buffer-based stretching method on that boundary?
         'ABC_STRETCH_BOTTOM': False,                # Use buffer-based stretching method on that boundary?
@@ -140,71 +75,179 @@ if __name__ == '__main__':
         #   legacy:      read model from 'model_velocity.dat_input'.
         #   external_DG: read DG model from 'atmospheric_model.dat' (generated with 'utils_new/Atmospheric_Models/Earth/wrapper/msisehwm'), and other models with "Velocity and Density Models" below.
         'MODEL': 'external_DG',
+        'read_external_mesh': True,
         }
     
+    ############################
     ## Simulation domain default
     options['simulation_domain'] = {
-        'z-min': -25000.,
-        'z-max': 9000.,
-        'dx': 1000.,
+        'z-min': -50000.,
+        'z-max': 70000.,
+        #'dx': 350.,
+        'dx': 500.,
         'offset_x': 10000.
         }
     options['simulation_domain'].update({'offset_xmin': options['simulation_domain']['dx']*20,'offset_xmax': options['simulation_domain']['dx']*20,})
-    
+
+    ##################
     ## Station default
     stations_default = pd.DataFrame()
     
-    options['ref_station']  = 'dummy_station'
+    options['ref_station']  = 'SANI'
     station = {
-        'lat': 0.,
-        'lon': 1,
+        'lat': -2.05,
+        'lon': 125.99,
         'z': 10., # above topography
-        'name': 'dummy_station',
-        'array': 'NO',
+        'name': 'SANI',
+        'array': 'GE',
         'coordinates': 'latlon'
         }
-    add_stations_based_on_angles = []
-    nb_stations_based_on_angles = 3
-    stations_default = stations_default.append( [station] )
     
-    ## Source default
-    source_default = {
-        'coordinates': 'latlon',
-        'lat': 0.,
-        'lon': 0.,
-        'zs': -10000.,
-        'date': UTCDateTime(2020, 5, 18, 1, 11, 57),
-        'scaling': 1e8,
-        'strike': 348.,
-        'dip': 35.,
-        'rake': 50.,
-        'mag': 4.6,
-        'stf_data': LS.load_stf(options['parfile']['DT'], options['parfile']['NSTEP'], file='/staff/quentin/Documents/Projects/Kiruna/Celso_data/20200518011156000_crust1se_001_stf.txt'),
-        'mt_coord_system': 'USE'
+    options['ref_station']  = 'Q23K'
+    station = {
+        'lat': 59.429600,
+        'lon': -146.339900,
+        'z': 10., # above topography
+        'name': 'Q23K',
+        'array': 'AK',
+        'coordinates': 'latlon'
         }
     
-    remove_firstlayer=False
+    options['ref_station']  = 'P16k'
+    station = {
+        'lat': 59.0314,
+        'lon': -157.9906,
+        'z': 10., # above topography
+        'name': 'P16k',
+        'array': 'AK',
+        'coordinates': 'latlon'
+        }
     
+    options['ref_station']  = 'balloon'
+    station = {
+        'lat': -45., 
+        'lon': 0.,
+        'z': 50.e3, # above topography
+        'name': 'balloon',
+        'array': 'VE',
+        'coordinates': 'latlon'
+        }
+
+    add_stations_based_on_angles = []
+    nb_stations_based_on_angles = 3
+    stations_default = pd.concat([stations_default, pd.DataFrame([station])])
+
+    ####################
     ## Source parameters
-    f0s = [0.3]
+    # Source default
+    source_default = {
+        'coordinates': 'latlon',
+        'lat': -7.603, # dummy
+         'lon': 122.227, # dummy
+        'zs': -10000., # dummy
+        'date': UTCDateTime('2021-12-14T03:20:23'), # dummy
+        'scaling': 1e8,
+        'strike': 290, # dummy
+        'dip': 89., # dummy
+        'rake': 177., # dummy
+        'mag': 7.3, 
+        'stf_data': 'Gaussian', # dummy
+        'mt_coord_system': 'USE'
+        }
+
+    stfs = ['Dirac', ]
+
+    # Flores
     mechanisms = []
+    f0s = [1./12.11]
+    strike = 190.
+    dip = 89.
+    rake = 177.
+    m6 = pmt.MomentTensor(strike=strike, dip=dip, rake=rake).m6()
+    mechanisms.append({'Mnn': m6[0], 'Mne': m6[3], 'Mnd': m6[4], 'Mee': m6[1], 'Med': m6[5], 'Mdd': m6[2],  }) 
+    location_source = dict(lat= -7.603, lon= 122.227, date=UTCDateTime('2021-12-14T03:20:23')) # Flores
+    source_default.update(location_source)
+    depths = [-17500.]
+
+    # Alaska
+    mechanisms = []
+    f0s = [1./30.31]
+    strike = 239.
+    dip = 14.
+    rake = 95.
+    m6 = pmt.MomentTensor(strike=strike, dip=dip, rake=rake).m6()
+    mechanisms.append({'Mnn': m6[0], 'Mne': m6[3], 'Mnd': m6[4], 'Mee': m6[1], 'Med': m6[5], 'Mdd': m6[2],  })
+    location_source = dict(lat= 55.3635, lon= -157.8876, date=UTCDateTime('2021-07-29T06:15:49.188000Z')) # Alaska 8.2 https://earthquake.usgs.gov/earthquakes/eventpage/ak0219neiszm/executive
+    source_default.update(location_source)
+    depths = [-35500.]
+
+    # Venus
+    mechanisms = []
+    f0s = [1./30.31]
     mechanisms.append({'Mnn': 0., 'Mne': 0., 'Mnd': -0., 'Mee': -0., 'Med': 1., 'Mdd': 1.,  }) # Normal fault
-    stfs = ['Gaussian', ]
+    location_source = dict(lat= -90., lon= 0., date=UTCDateTime('2021-07-29T06:15:49.188000Z')) # Alaska 8.2 https://earthquake.usgs.gov/earthquakes/eventpage/ak0219neiszm/executive
+    source_default.update(location_source)
+    depths = [-35500.]
+
+    #############
+    ## Topography
+    options['add_topography'] = True
+
+    file = './data_venus/quickmap-profile-data_profile_topo_large.csv'
+    options['topography_data'] = LS.read_venus_topography(file, source_default['lat'], source_default['lon'], station['lat'], station['lon'], options['simulation_domain']['offset_x'], R0=6052000)
+    options['fit_vel_to_topo'] = False
+    #options['topography_data'] = None
+    #options['fit_vel_to_topo'] = True
+    #import matplotlib.pyplot as plt; plt.figure(); plt.plot(options['topography_data'].R, options['topography_data'].topo); plt.savefig('./test_topo.png')
+   
+    options['force_topo_at_zero'] = True
+    options['interpolation_method_topography'] = 'linear'
+    options['low_pass_topography'] = False
+
+    ################
+    ## External mesh
+    options['ext_mesh'] = dict(
+        min_size_element = options['simulation_domain']['dx'], 
+        #max_size_element_seismic = 2500.,  
+        #max_size_element_seismic = 1500., 
+        max_size_element_seismic = 2500., 
+        max_size_element_atmosphere = options['simulation_domain']['dx'], 
+        use_pygmsh = True,
+        use_cpml = True,
+        save_mesh = True,
+        factor_transition_zone = 10.,
+        factor_pml_lc_g = 10.,
+        alpha_taper = 0.1,
+    )
+    options['parfile']['read_external_mesh'] = False
     
-    ## Model parameters
+    ###########################
+    ## Seismic model parameters
+    remove_firstlayer=False
     seismic_models, dir_models = {}, []
-    seismic_model_path = './test_data_Venus/venuscrust.txt'
+    seismic_model_path = './data_flores/model_seismic_flores_2d.csv'
+    seismic_model_path = './data_flores/model_seismic_flores_2d_notopo.csv'
+    seismic_model_path = '.\data_alaska\model_seismic_alaska8.2_2d_notopo.csv'
+    seismic_model_path = '.\data_alaska\model_seismic_alaska8.2_2d_notopo_P16K.csv'
+    twod_output=True
+    #dir_models.append(seismic_model_path)
+    #seismic_models.update( {seismic_model_path: LS.load_external_seismic_model(seismic_model_path, add_graves_attenuation=False, columns=['distance', 'h', 'depth', 'vs', 'vp', 'rho', 'Qs', 'Qp'], unit_depth='km', remove_firstlayer=remove_firstlayer)} )
+
+    seismic_model_path='./data_venus/quickmap-profile-data_crust_topo_large.csv'; 
     dir_models.append(seismic_model_path)
-    seismic_models.update( {seismic_model_path: LS.load_external_seismic_model(seismic_model_path, add_graves_attenuation=False, columns=['h', 'vs', 'vp', 'rho', 'Qs', 'Qp'], unit_depth='km', remove_firstlayer=remove_firstlayer)} )
-    depths = [-10000.]
-    
-    parameters = create_parameter_space(mechanisms, f0s, stfs, dir_models, depths)
+    model = LS.build_venus_model(seismic_model_path, vs_crust=3.5, vp_crust=6., rho_crust=2.8, Qp_crust=1500., Qs_crust=600., vs_mantle=4.4, vp_mantle=7.5, rho_mantle=3.3, Qp_mantle=1500., Qs_mantle=600., h_mantle=1000.)
+    seismic_models.update( {seismic_model_path: model} )
+
+    #########################
+    ## Create parameter space
+    parameters = LS.create_parameter_space(mechanisms, f0s, stfs, dir_models, depths)
 
     # from importlib import reload;
     # reload(LS)
     # LS.create_stations_at_given_altitude(source_default, stations_default, [5000.], nb_stations=10)
-    
-    ## Loop over requested parameter space
+
+    ###################################################################
+    ## Loop over requested parameter space to create simulation folders
     all_parameters_txt = pd.DataFrame()
     for mechanism, f0, stf, dir_model, depth in parameters:
         
@@ -220,34 +263,33 @@ if __name__ == '__main__':
         
         ## Stations
         options['station'] = stations_default.copy()
-        options['station'] = LS.create_stations_along_surface(options['source'], options['station'], nb_stations=10, add_seismic=True, add_array_around_station=True, dx_array=100, nb_in_array=5, add_stations_based_on_angles=add_stations_based_on_angles, source_depth=depth, nb_stations_based_on_angles=nb_stations_based_on_angles)
-        alt = 2000.
+        options['station'] = LS.create_stations_along_surface(options['source'], options['station'], nb_stations=10, add_seismic=True, add_array_around_station=False, dx_array=100, nb_in_array=5, add_stations_based_on_angles=add_stations_based_on_angles, source_depth=depth, nb_stations_based_on_angles=nb_stations_based_on_angles)
+        alts = [10e3, 20e3, 30e3]
         nb_stations = 10
         stations = options['station'].loc[options['station']['name']==options['ref_station']]
-        options['station'] = options['station'].append( LS.create_stations_at_given_altitude(options['source'], stations, [alt], nb_stations=nb_stations) )
+        options['station'] = pd.concat([options['station'], LS.create_stations_at_given_altitude(options['source'], stations, alts, nb_stations=nb_stations)])
         options['station'].reset_index(drop=True, inplace=True)
         
-        ## Compute right spatial step - not used
-        #v_acous = 0.34
-        #dx = 0.5 * v_acous*1e3/f0
-        
         ## Create simulation
-        simulation = LS.create_simulation(options, file_pkl='')
+        simulation = LS.create_simulation(**options, file_pkl='')
         LS.create_params_file(simulation)
         LS.create_source_file(simulation)
         LS.create_station_file(simulation)
         LS.create_interface_file(simulation)
-        LS.create_velocity_model(simulation, twod_output=False)
+        LS.create_seismic_model(simulation, twod_output=twod_output)
         LS.create_atmos_model(simulation)
         simulation.save_simulation_parameters()
         
         ## Parameter to print
         parameter_file = simulation.simu_folder + '/parameters.csv'
-        #parameter_txt = create_dataframe_from_parameters(mechanism, {'f0': f0}, {'stf': stf}, dir_model, {'zs': depth})
-        mechanism.update({'no': simulation.simu_folder.split('_')[-1], 'dir_simu': simulation.simu_folder, 'f0': f0, 'stf': stf, 'atmos_file': atmos_file, 'seismic_model': dir_model, 'zs': depth})
+        mechanism.update({'no': simulation.simu_folder.split('_')[-1], 'dir_simu': simulation.simu_folder, 'f0': f0, 'stf': stf, 'atmos_file': 'ncpa', 'seismic_model': dir_model, 'zs': depth})
         parameter_txt = pd.DataFrame([mechanism])
         parameter_txt.to_csv(parameter_file, header=True, index=False)
-        all_parameters_txt = all_parameters_txt.append(parameter_txt)
+        all_parameters_txt = pd.concat([all_parameters_txt, parameter_txt])
+
+        ## Plot domain
+        from importlib import reload;  reload(LS);  file = f'{simulation.simu_folder}/simulation_domain.png'; LS.plot_simulation_domain(simulation, file, n_depths=100, max_depth=abs(options['simulation_domain']['z-min'])/1e3)
         
-    create_all_parameters(options['specfem_folder'], all_parameters_txt, options['template'])
+    #LS.create_all_parameters(options['specfem_folder'], all_parameters_txt, options['template'])
+    #import matplotlib.pyplot as plt; plt.figure(); plt.plot(simulation.distance, simulation.topography); plt.savefig('./test_topo.png')
     bp()

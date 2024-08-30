@@ -11,12 +11,33 @@ from scipy.interpolate import griddata
 from obspy.core.utcdatetime import UTCDateTime
 from obspy.geodetics.base import gps2dist_azimuth    
 import great_circle_calculator.great_circle_calculator as gcc
+import sys
 
 try:
     import plotting_routines
 except:
     print('Plotting routines not available')
     
+def generate_NCPA_profiles(simulation_folder, lat, lon, time, folder_ncpa='./ncpag2s-clc/'):
+
+    """
+    Download and format NCPA profiles to SPECFEM format
+    """
+    
+    date = time.strftime('%Y-%m-%d')
+    hour = time.hour
+    file_temp = f'{simulation_folder}/atmos_temp.dat'
+
+    sys.path.append(os.path.abspath(os.path.expanduser(folder_ncpa))) ## Add NCPA profile downloader
+    from ncpa.g2scli import execute_from_command_line
+
+    file_ncpa = f'{folder_ncpa}ncpag2s.py'; 
+    args_ncpa = [os.path.abspath(os.path.expanduser(file_ncpa)), 'point', '--date', date, '--hour', str(hour), '--lat', str(lat), '--lon', str(lon), '--outputformat', 'ncpaprop', '--output', os.path.abspath(os.path.expanduser(file_temp))]
+    execute_from_command_line(args_ncpa)
+    #cmd = f'python {os.path.abspath(os.path.expanduser(file_ncpa))} point --date {date} --hour {hour} --lat {lat} --lon {lon} --outputformat ncpaprop --output {os.path.abspath(os.path.expanduser(file_temp))}'
+    
+    return file_temp
+
 def build_locations(source, receiver, number_points):
     
     fractions = np.linspace(0., 1., number_points)
@@ -66,11 +87,13 @@ def is_point_outside_domain(points, new_point):
     return outside
    
 def interpolate_external_model(list_of_points_in, lats_in, lons_in, heights, 
-                               levels, zonal_in, meridonial_in, temperature_in, kind_1d_interp='cubic', 
+                               zonal_in, meridonial_in, temperature_in, kind_1d_interp='cubic', 
                                default_offset_interp=1e-5, offset=7., handle_ensembles=-1):
     
     list_of_points = list_of_points_in.copy()
     lons, lats = lons_in.copy(), lats_in.copy()
+    if isinstance(lons, np.ma.MaskedArray):
+        lons, lats = lons.filled(), lats.filled()
     
     print('Build grid')
     
@@ -91,14 +114,14 @@ def interpolate_external_model(list_of_points_in, lats_in, lons_in, heights,
         
     min_lat, max_lat = list_of_points[:,1].min()-offset, list_of_points[:,1].max()+offset
     min_lon, max_lon = list_of_points[:,0].min()-offset, list_of_points[:,0].max()+offset
-    LAT, LON = np.meshgrid(lats.filled(), lons.filled())
+    LAT, LON = np.meshgrid(lats, lons)
     
-    idx_lat = np.where((lats.filled() <= max_lat) & (lats.filled() >= min_lat))[0]
+    idx_lat = np.where((lats <= max_lat) & (lats >= min_lat))[0]
     if idx_lat.size == 0:
-        idx_lat = np.array([np.argmin(abs(lats.filled()-max_lat))])
-    idx_lon = np.where((lons.filled() <= max_lon) & (lons.filled() >= min_lon))[0]
+        idx_lat = np.array([np.argmin(abs(lats-max_lat))])
+    idx_lon = np.where((lons <= max_lon) & (lons >= min_lon))[0]
     if idx_lon.size == 0:
-        idx_lon = np.array([np.argmin(abs(lons.filled()-max_lon))])
+        idx_lon = np.array([np.argmin(abs(lons-max_lon))])
     
     LAT = LAT[:, idx_lat]
     LAT = LAT[idx_lon, :]
@@ -140,7 +163,7 @@ def interpolate_external_model(list_of_points_in, lats_in, lons_in, heights,
     for variable in variables:
         
         atmos_model[variable] = []
-        for iheight, height in enumerate(heights):
+        for iheight, _ in enumerate(heights):
             
             field = variables[variable]
             """
@@ -231,7 +254,7 @@ def run_MSISHWM_wrapper(location, date_UTC, zmax, N, file_sw='/projects/active/i
     
     ## Collect space weather parameters 
     if file_sw:
-        df_MSIS = pd.read_csv(file_sw, header=[0], parse_dates=['index'])
+        df_MSIS = pd.read_csv(os.path.abspath(os.path.expanduser(file_sw)), header=[0], parse_dates=['index'])
     else:
         df_MSIS = sw.sw_daily()
         df_MSIS.reset_index(inplace=True)
@@ -248,6 +271,7 @@ def run_MSISHWM_wrapper(location, date_UTC, zmax, N, file_sw='/projects/active/i
     ## Run wrapper
     output = 'msisehwm_model_output_{pid}'.format(pid=os.getpid())
     cmd_format = './msis {min_alt} {max_alt} {N_samples} {lat} {lon} {year} {doy} {sec_UTC} {F107A} {F107} {AP} {output}'
+    cmd_format_windows = './msis {min_alt} {max_alt} {N_samples} {lat} {lon} {year} {doy} {sec_UTC} {F107A} {F107} {AP} {output}'
     args = {
         'min_alt': 0.,
         'max_alt': zmax*1e3,
@@ -262,20 +286,28 @@ def run_MSISHWM_wrapper(location, date_UTC, zmax, N, file_sw='/projects/active/i
         'AP': AP,
         'output': output,
     }
+    os.environ['PATH'] += ";C:\\msys64\\ucrt64\\bin"
     cmd = cmd_format.format(**args)
-    os.chdir(bin_dir)
-    os.system(cmd)
+    cmd_windows = cmd_format_windows.format(**args)
+    current_folder = os.getcwd()
+    os.chdir(os.path.abspath(os.path.expanduser(bin_dir)))
+    code = os.system(os.path.abspath(os.path.expanduser(cmd)))
+    if not code == 0: ## Switching to windows
+        code = os.system(os.path.abspath(os.path.expanduser(cmd_windows)))
     
     ## Read output file
     msishwm = pd.read_csv(output, skiprows=[0,1], header=[0], delim_whitespace=True)
     msishwm['wx'] = msishwm['w_M[m/s]']
     msishwm = msishwm[['z[m]', 'T[K]', 'wx', 'w_Z[m/s]', 'w_M[m/s]', 'rho[kg/(m^3)]', 'p[Pa]', 'c[m/s]', 'g[m/(s^2)]']]
     msishwm.columns = ['z', 't', 'wx', 'u', 'v', 'rho', 'p', 'c', 'g']
+
+    os.remove(output)
+    os.chdir(current_folder)
     
     return msishwm
    
 import fluids
-def get_MSISE(location, date_UTC, zmax, N, use_fluids_lib=False):
+def get_MSISE(location, date_UTC, zmax, N, use_fluids_lib=False, file_sw='/projects/active/infrasound/data/infrasound/2021_seed_infrAI/model_atmos_fixed/spaceweather.csv', bin_dir='/staff/quentin/Documents/Codes/msis20hwm14/'):
 
     ## Either use fluids library which is already implemented within Python or HWMMSIS Fortran wrapper
     ## fluids library seems to be wrong in its HWM14 implementation
@@ -320,7 +352,7 @@ def get_MSISE(location, date_UTC, zmax, N, use_fluids_lib=False):
         """
         
     else:
-        model = run_MSISHWM_wrapper(location, date_UTC, zmax, N)
+        model = run_MSISHWM_wrapper(location, date_UTC, zmax, N, file_sw=file_sw, bin_dir=bin_dir)
    
     return model
    
@@ -505,20 +537,41 @@ def project_wind_along_azimuth(meridional, zonal, baz_ref_station):
     projection_wind = zonal*np.sin(baz_ref_station_rad) + meridional*np.cos(baz_ref_station_rad)
     return projection_wind
 
+def get_source_velocity_from_temp(temperature, R=287., gamma=1.4):
+    return np.sqrt(temperature*R*gamma)
+
 class atmos_model():
     
-    def __init__(self, source, receiver, time, max_height, nc_file):
+    def __init__(self, source, receiver, time, max_height, input_file, type_input_file='ecmwf', file_sw='/projects/active/infrasound/data/infrasound/2021_seed_infrAI/model_atmos_fixed/spaceweather.csv', bin_dir='/staff/quentin/Documents/Codes/msis20hwm14/'):
         
         ## Save input parameters
         self.time       = time
         self.max_height = max_height
-        self.nc_file    = nc_file
+        self.input_file    = input_file
+        self.type_input_file = type_input_file
         self.source, self.receiver = source, receiver
+        self.file_sw = file_sw
+        self.bin_dir = bin_dir
         
+        self._load_orig_profile()
+        
+    def _load_orig_profile(self):
+
         ## Extract lat/lon and atmospheric data from netcdf
-        self.lats, self.lons, self.heights, self.levels, self.times, \
-            self.zonal, self.meridonial, self.temperature = read_one_netcdf(self.nc_file)
-        
+        if self.type_input_file == 'ecmwf':
+            self.lats, self.lons, self.heights, self.levels, self.times, self.zonal, self.meridonial, self.temperature = read_one_netcdf(self.input_file)
+        elif self.type_input_file == 'ncpa':
+            atmos_model = pd.read_csv(os.path.abspath(os.path.expanduser(self.input_file)), skiprows=13, header=None, delim_whitespace=True, names=['z', 't', 'u', 'v', 'rho', 'p'])
+            self.lats = np.array([self.source[0]])
+            self.lons = np.array([self.source[0]])
+            self.heights = atmos_model.z.values*1e3
+            self.times = np.array([self.time])
+            self.zonal = atmos_model.u.values[None,:,None,None]
+            self.meridonial = atmos_model.v.values[None,:,None,None]
+            self.temperature = atmos_model.t.values[None,:,None,None]
+        else:
+            print('Input file format not recognized')
+
     def _update_atmos_model(self, N=1000, projection=False, ref_projection={}, smooth_model=True, smooth_radius=7.5, add_MSISE_var=True):
     
         #print('-->', self.list_of_points)
@@ -537,12 +590,13 @@ class atmos_model():
                     field = self.external_model_interpolated[variable][:, ilocation]
                     f = interpolate.interp1d(self.heights, field, kind='cubic', fill_value='extrapolate')
                     MSISE[variable] = f(new_heights)
-                MSISE['c'] = np.sqrt(401.87430086589046*MSISE['t'])
+                #MSISE['c'] = np.sqrt(401.87430086589046*MSISE['t'])
+                MSISE['c'] = get_source_velocity_from_temp(MSISE['t'].values, R=287., gamma=1.4)
                 MSISE['z'] = new_heights
                     
             else:
             
-                MSISE = get_MSISE(location, self.time, self.max_height, N)
+                MSISE = get_MSISE(location, self.time, self.max_height, N, file_sw=self.file_sw, bin_dir=self.bin_dir)
                 for variable in self.external_model_interpolated:
                     field = self.external_model_interpolated[variable][:, ilocation]
                     f = interpolate.interp1d(self.heights, field, kind='cubic')
@@ -550,7 +604,7 @@ class atmos_model():
                     field_interpolated = f(new_heights)
                     MSISE.loc[(MSISE['z'] <= self.heights[0]) & (MSISE['z'] >= self.heights[-1]), variable] = field_interpolated
                 
-                    if smooth_model:
+                    if smooth_model and (np.max(self.heights) < MSISE.z.max()):
                         MSISE_out_smooth = MSISE.loc[(MSISE.z <= np.max(self.heights)-smooth_radius*1e3) | (MSISE.z >= np.max(self.heights)+smooth_radius*1e3), :]
                         f = interpolate.interp1d(MSISE_out_smooth.z.values, MSISE_out_smooth[variable].values, kind='cubic')
                         #MSISE_test = MSISE.copy()
@@ -564,7 +618,8 @@ class atmos_model():
                     MSISE['wx'] = projection_wind
         
             MSISE = MSISE.assign(lat = location[0], lon = location[1], distance = distance)
-            self.updated_model = self.updated_model.append( MSISE.copy() )
+            #self.updated_model = self.updated_model.append( MSISE.copy() )
+            self.updated_model = pd.concat([self.updated_model, MSISE.copy()])
                 
         self.updated_model.reset_index(drop=True, inplace=True)
         
@@ -671,8 +726,7 @@ class atmos_model():
         print('Before interpolation')
         self.external_model_interpolated = \
             interpolate_external_model(self.list_of_points, self.lats, self.lons, 
-                                       self.heights, self.levels, self.zonal, 
-                                       self.meridonial, self.temperature, kind_1d_interp='cubic', 
+                                       self.heights, self.zonal, self.meridonial, self.temperature, kind_1d_interp='cubic', 
                                        default_offset_interp=1e-5, offset = offset, handle_ensembles=handle_ensembles)
         
         # Check if crashed interpolation

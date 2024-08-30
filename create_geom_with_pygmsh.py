@@ -16,8 +16,9 @@ class rectangles:
 
     n_rects = 0
 
-    def __init__(self, geom):
+    def __init__(self, geom, verbose=False):
         # reset list and dict
+        self.verbose = verbose
         self.list_rects = []
         self.dict_points_created = {}
         self.dict_lines_created = {}
@@ -85,8 +86,9 @@ class rectangles:
             print("Error: top rectangle is not found")
             sys.exit()
 
-        print("bottom rectangle id", irect_bottom)
-        print("top rectangle id", irect_top)
+        if self.verbose:
+            print("bottom rectangle id", irect_bottom)
+            print("top rectangle id", irect_top)
 
         # add top tag if top_pml is False
         if not top_pml:
@@ -257,7 +259,8 @@ class rectangles:
 
         # create line loops and surfaces
         for rect in self.list_rects:
-            print("creating surface for rect.id", rect.id)
+            if self.verbose:
+                print("creating surface for rect.id", rect.id)
             rect.create_surface(geom)
 
         # do recombile
@@ -287,12 +290,14 @@ class rectangles:
             for rect in self.list_rects:
                 if rect.pml_tag == pml_tag:
                     list_ps.append(rect.ps)
-            print("pml_tag", pml_tag, "list_ps", list_ps)
+            if self.verbose:
+                print("pml_tag", pml_tag, "list_ps", list_ps)
             if (len(list_ps) > 0):
                 geom.add_physical(list_ps, label=pml_tag)
             else:
                 # warning if no pml is found
-                print("Warning: no PML is found for ", pml_tag)
+                if self.verbose:
+                    print("Warning: no PML is found for ", pml_tag)
 
         # set boundary groups
         list_l_left = []
@@ -354,7 +359,7 @@ class one_rect:
     def __init__(self, geom, id_rect, xy1, xy2, xy3, xy4, lc,
                  transfinite=False, transfinite_1d=False,
                  nelm_h=None, nelm_v=None,
-                 mat_tag=None, pml_tag=None, bound_tag=None, topo=None):
+                 mat_tag=None, pml_tag=None, bound_tag=None, topo=None, verbose=False):
         # xy1, xy2, xy3, xy4: four corners of the rectangle
         # e.g. xy1 = (0,0,0) # dummy z
         # points should be placed as
@@ -365,6 +370,7 @@ class one_rect:
         |         |
         xy1 -l1- xy2
         """
+        self.verbose = verbose
         self.id = id_rect
         self.list_xy = [xy1, xy2, xy3, xy4]
         self.list_points = [None, None, None, None]
@@ -384,8 +390,9 @@ class one_rect:
         self.nelm_h = nelm_h
         self.nelm_v = nelm_v
         # print
-        print(f"rectangle id {self.id} is meshed with nelm_h (bottom,top) = {nelm_h} \
-                and nelm_v (left, right) = {nelm_v}")
+        if self.verbose:
+            print(f"rectangle id {self.id} is meshed with nelm_h (bottom,top) = {nelm_h} \
+                    and nelm_v (left, right) = {nelm_v}")
 
         # material tag
         self.mat_tag = mat_tag
