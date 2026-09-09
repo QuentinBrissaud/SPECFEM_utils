@@ -72,6 +72,37 @@ def format_quad_validation_report(report):
     return "\n".join(msg)
 
 
+def reorder_quad_nodes_counterclockwise(points, quads):
+    """
+    Return first-order quads ordered counter-clockwise from the lower-left node.
+
+    Gmsh can occasionally emit valid quadrilateral vertices in a cyclic order
+    that gives SPECFEM a negative Jacobian. This fixes node ordering only; it
+    does not hide non-local stitching because the geometry validator still runs
+    after reordering.
+    """
+
+    points = np.asarray(points)[:, 0:2]
+    quads = np.asarray(quads)
+    reordered = quads.copy()
+    quad_points = points[quads[:, 0:4]]
+    centers = np.mean(quad_points, axis=1)
+    angles = np.arctan2(
+        quad_points[:, :, 1] - centers[:, None, 1],
+        quad_points[:, :, 0] - centers[:, None, 0],
+    )
+    order = np.argsort(angles, axis=1)
+    sorted_quads = np.take_along_axis(quads[:, 0:4], order, axis=1)
+    sorted_points = np.take_along_axis(quad_points, order[:, :, None], axis=1)
+
+    for i in range(sorted_quads.shape[0]):
+        # Use the left-most, then lowest, point as SPECFEM node 1.
+        start = np.lexsort((sorted_points[i, :, 1], sorted_points[i, :, 0]))[0]
+        reordered[i, 0:4] = np.roll(sorted_quads[i], -start)
+
+    return reordered
+
+
 @numba.jit(nopython=True)
 def get_cpml_cells_except_damping(
                 PML_X_elms_orig,
@@ -315,6 +346,20 @@ class Meshio2Specfem2D:
 
         if report["bad_area"].size or report["bad_edges"].size:
             raise ValueError(format_quad_validation_report(report))
+
+
+    def repair_quad_node_order(self):
+        """
+        Reorder first-order quad corner nodes into SPECFEM's expected orientation.
+        """
+
+        points = self.mesh.points[:, 0:2]
+        for cell_block in self.mesh.cells:
+            if cell_block.type == self.key_quad:
+                cell_block.data[:, 0:4] = reorder_quad_nodes_counterclockwise(
+                    points,
+                    cell_block.data[:, 0:4],
+                )
 
 
     def write_mesh(self):
