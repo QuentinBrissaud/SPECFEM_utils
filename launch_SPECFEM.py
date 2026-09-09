@@ -93,20 +93,25 @@ def load_stations(file):
     Load SPECFEM station file
     """
     
-    stations = pd.read_csv(file, engine='python', delim_whitespace=True, header=None)
+    stations = pd.read_csv(file, engine='python', sep=r'\s+', header=None)
     stations.columns = ['name', 'array', 'x', 'z', 'd0', 'd1']
     return stations
  
-def compute_distance(x, source_latlon):
+def compute_distance(x, source_latlon, R0=6052000):
 
     """
     Compute cartesian distance between a source and a station
     """
 
     if x['coordinates'] == 'latlon':
-        distance = gps2dist_azimuth(source_latlon[0], source_latlon[1], x['lat'], x['lon'])
-        x['x']   = distance[0]
-        x['baz'] = distance[2]
+        #distance = gps2dist_azimuth(source_latlon[0], source_latlon[1], x['lat'], x['lon'])
+        #x['x']   = distance[0]
+        #x['baz'] = distance[2]
+        g = Geod(proj='robin', lat_0=0., lon_0=0., a=R0, b=R0) 
+        az12, az21, dist = g.inv(source_latlon[1], source_latlon[0], x['lon'], x['lat'])
+        signed_dist = dist * np.sign(np.sin(np.deg2rad(az12)))
+        x['x']   = signed_dist
+        x['baz'] = az21
     else: # default case
         x['lat'] = source_latlon[0]
         x['lon'] = source_latlon[1] + kilometer2degrees(x['x'])
@@ -131,7 +136,7 @@ def correct_coordinates_stations(input_station, source_latlon):
             sys.exit('Please provide source latitude and longitude to use lat/lon station coordinates.')
     
     input_station = input_station.apply(compute_distance, args=[source_latlon], axis=1)
-        
+    
     return input_station
  
 def build_stations(stations, input_station):
@@ -164,7 +169,7 @@ def create_station_file(simulation):
     stations = simulation.stations
     file     = simulation.station_file
     format_station = ['name', 'array', 'x', 'z', 'd0', 'd1']
-    stations[format_station].to_csv(file, sep='\t', header=False, index=False, lineterminator='\n')
+    stations[format_station].to_csv(file, sep='\t', header=False, index=False, line_terminator='\n')
  
 def get_name_new_folder(dir_new_folder, template):
 
@@ -262,7 +267,8 @@ def get_points_towards_ref_station(source_latlon, ref_station, offset_xmin, offs
 
     g = Geod(proj='robin', lat_0=0., lon_0=0., a=R0, b=R0) 
     az12, az21, dist = g.inv(source_latlon[1], source_latlon[0], ref_station['lon'], ref_station['lat'])
-    startlon, startlat, _ = g.fwd(source_latlon[1], source_latlon[0], az21, offset_xmin)
+    
+    startlon, startlat, _ = g.fwd(source_latlon[1], source_latlon[0], az12, offset_xmin)
     endlon, endlat, _ = g.fwd(ref_station['lon'], ref_station['lat'], az12, offset_xmax)
     az12, _, dist = g.inv(startlon, startlat, endlon, endlat)
     del_s = dist/(N+1)
@@ -474,7 +480,6 @@ def collect_topo_in_region(domain, new_lon, new_lat, offset_xmin, offset_xmax, a
         
     topo_interp[np.isnan(topo_interp)] = 0. # Remove nan
 
-    #bp()
     #plt.figure(); plt.scatter(points[:,0], points[:,1], c=np.arange(points[:,1].size)); plt.savefig('./test_topo.png')
     #plt.figure(); plt.plot(topo_interp); plt.savefig('./test_topo.png')
     #plt.figure(); plt.plot(topography_data.topo.values); plt.savefig('./test_topo.png')
@@ -831,9 +836,13 @@ def create_atmos_model(simulation):
         if not key in atmos_model.keys():
             atmos_model[key] = -1
     
-    atmos_model[template_atmos].to_csv(atmos_file, header=None, index=False, sep=' ', lineterminator='\n')
+    atmos_model[template_atmos].to_csv(atmos_file, header=None, index=False, sep=' ', line_terminator='\n')
     
 def create_instance_mt(input_source):
+
+    """
+    Create a Pyrocko moment tensor instance from user provided parameters
+    """
 
     ## Create tensor from strike/dip/rake
     mw = input_source['mag']
@@ -1073,7 +1082,7 @@ class create_simulation():
         if self.input_source['stf'] == 'external':
             stf_file = self.simu_folder + '/stf.csv'
             self.source.loc['name_of_source_file'] = './stf.csv'
-            self.input_source['stf_data'].to_csv(stf_file, header=False, index=False, sep=' ', lineterminator='\n')
+            self.input_source['stf_data'].to_csv(stf_file, header=False, index=False, sep=' ', line_terminator='\n')
             
     def _update_moment_tensor(self):
     
@@ -1088,6 +1097,7 @@ class create_simulation():
         self.input_stations = correct_coordinates_stations(self.input_stations, self.source_latlon)
         self.stations = build_stations(self.stations, self.input_stations)  
         self.ref_station = get_ref_station(self.stations, self.ref_station_name)
+
         
     """
     def _fix_mesh_size(self):
@@ -1132,7 +1142,7 @@ class create_simulation():
                 topo=self.topography, 
                 simulation_folder=self.simu_folder,
                 lc_w=self.max_size_element_atmosphere, 
-                lc_g=self.max_size_element_seismic
+                lc_g=self.max_size_element_seismic,
             )
             opt_pygmsh = dict(
                 factor_transition_zone=self.factor_transition_zone, 
@@ -1142,26 +1152,33 @@ class create_simulation():
                 alpha_taper=self.alpha_taper
             )
             done = False
+            last_mesh_error = None
             ioffset = -1
+            base_distance = self.distance.copy()
             ## We progressively change the maximum size of the domain to avoid numerical instabilities during mesh generation.
             while not done and ioffset < max_step:
                 ioffset += 1
                 #print(f'Build external mesh iteration {ioffset}')
-                self.distance[-1] += ioffset*input_pygmsh['lc_g']
-                input_pygmsh['dists'] = self.distance
+                distance_attempt = base_distance.copy()
+                distance_attempt[-1] += ioffset*input_pygmsh['lc_g']
+                input_pygmsh['dists'] = distance_attempt
                 #print(input_pygmsh['dists'][-1])
                 #xmin, xmax, nelm_h_g, nelm_h_w, zmin, zmax, self.distance, self.topography = create_mesh_gmsh.create_mesh_pygmsh(**input_pygmsh, **opt_pygmsh)
                 try:
                     xmin, xmax, nelm_h_g, nelm_h_w, zmin, zmax, distance, self.topography = create_mesh_gmsh.create_mesh_pygmsh(**input_pygmsh, **opt_pygmsh)
-                except:
+                except ModuleNotFoundError as exc:
+                    raise RuntimeError(f'Missing Python dependency while creating mesh: {exc}') from exc
+                except Exception as exc:
+                    last_mesh_error = exc
+                    print(f'Issue creating mesh at offset iteration {ioffset}: {exc}')
                     continue
                 done = True
 
+            if not done:
+                raise RuntimeError('problem building external mesh') from last_mesh_error
+
             self.distance = distance
             self.xmin, self.xmax = xmin, xmax
-
-            if not done:
-                print('problem building external mesh')
 
         else: ## Not working yet. Need to output SPECFEM ready files, not just gmsh mesh file 
             mesh = dict(
@@ -1219,7 +1236,7 @@ class create_simulation():
         self.interface_file = self.simu_folder + '/interfaces_input'
         
         self.vertical_points_new, self.layers, self.SEM_layers, self.xmin, self.xmax, self.nx = get_interface(self.simulation_domain, self.input_stations, self.distance, force_topo_at_zero=self.force_topo_at_zero)
-                             
+              
         if not self.add_topography:
             self.topography += self.vertical_points_new[1]
         
@@ -1306,31 +1323,43 @@ def compute_hlayer_from_depth(seismic_model, unit_depth):
             new_entry['h'] *= 1e3
         previous_entry = entry.copy()
         #new_seismic_model = new_seismic_model.append( new_entry[['h', 'vp', 'vs', 'rho']] )
-        new_seismic_model = pd.concat([new_seismic_model, [new_entry[['h', 'vp', 'vs', 'rho']]]] )
+        #print(new_entry[['h', 'vp', 'vs', 'rho']])
+        new_entry = pd.DataFrame([new_entry[['depth', 'h', 'vp', 'vs', 'rho']]])
+        new_seismic_model = pd.concat([new_seismic_model, new_entry])
         
     return new_seismic_model
       
-def load_external_seismic_model(seismic_model_path, add_graves_attenuation=False, columns=['depth', 'vp', 'vs', 'rho'], unit_depth='km', remove_firstlayer=False):
+def load_external_seismic_model(seismic_model_path, offset_topo_and_vel_with_source, add_graves_attenuation=False, columns=['depth', 'vp', 'vs', 'rho'], unit_depth='km', remove_firstlayer=False, header=[0], delim_whitespace=True, add_h_to_cols=False):
 
     """
     Format user seismic velocity model before creating simulation folder 
     """
     
-    seismic_model = pd.read_csv(seismic_model_path, delim_whitespace=True, header=[0])
+    if delim_whitespace:
+        seismic_model = pd.read_csv(seismic_model_path, sep=r'\s+', header=header)
+    else:
+        seismic_model = pd.read_csv(seismic_model_path, header=header)
     seismic_model.columns = columns
     seismic_model.reset_index(inplace=True, drop=True)
-    
+
+    #plt.figure(); plt.scatter(seismic_model.distance, seismic_model.depth, c=seismic_model.vs); plt.savefig('./test_snapshot_vel.png')
+    #bp()
+
     if remove_firstlayer:
         seismic_model = seismic_model.iloc[1:]
         seismic_model.reset_index(inplace=True, drop=True)
     
-    if not 'h' in columns:
-        seismic_model = compute_hlayer_from_depth(seismic_model, unit_depth)
-    elif unit_depth == 'km':
-        seismic_model['h'] *= 1e3
+    if add_h_to_cols:
+        if not 'h' in columns:
+            seismic_model = compute_hlayer_from_depth(seismic_model, unit_depth)
+        elif unit_depth == 'km':
+            seismic_model['h'] *= 1e3
 
     if 'distance' in columns and unit_depth == 'km':
         seismic_model['distance'] *= 1e3
+
+    if not 'distance' in columns:
+        seismic_model['distance'] = 0.
 
     if 'depth' in columns and unit_depth == 'km':
         seismic_model['depth'] *= 1e3
@@ -1342,6 +1371,8 @@ def load_external_seismic_model(seismic_model_path, add_graves_attenuation=False
     if add_graves_attenuation:
         seismic_model['Qs'] = 0.05 * seismic_model['vs'] * 1e3
         seismic_model['Qp'] = 2. * seismic_model['Qs'] * 1e3
+
+    seismic_model.loc[:, 'distance'] -= offset_topo_and_vel_with_source
       
     return seismic_model
       
@@ -1508,7 +1539,7 @@ def create_all_parameters(output_dir, all_parameters, template):
     name = template.format(no=f'{all_parameters.no.min()}-{all_parameters.no.max()}')
     all_parameters.reset_index(drop=True, inplace=True)
     parameter_file = '{output_dir}/parameters_{name}.csv'.format(output_dir=output_dir, name=name)
-    all_parameters.to_csv(parameter_file, header=True, index=True, lineterminator='\n')
+    all_parameters.to_csv(parameter_file, header=True, index=True, line_terminator='\n')
     print('Simulations generated:')
     print(all_parameters)
 
@@ -1530,7 +1561,7 @@ def create_parameter_space(mechanisms, f0s, stfs, dir_models, depths):
 Station creation routines
 """
 
-def create_stations_at_given_altitude(source_dict, stations, altitudes, nb_stations=10):
+def create_stations_at_given_altitude(source_dict, stations, simulation_domain, altitudes, nb_stations=10):
 
     station_template = stations.iloc[0].to_dict()
     
@@ -1547,12 +1578,22 @@ def create_stations_at_given_altitude(source_dict, stations, altitudes, nb_stati
         source_loc = source_dict['lat'], source_dict['lon']
         stat_ref_loc = stations.iloc[0].lat, stations.iloc[0].lon
         wgs84_geod = Geod(ellps='WGS84')
-        l_coord = wgs84_geod.inv_intermediate(source_loc[1], source_loc[0], stat_ref_loc[1], stat_ref_loc[0], nb_stations-1)
-        lons = np.array(l_coord.lons).astype(float)
+        #l_coord = wgs84_geod.inv_intermediate(source_loc[1], source_loc[0], stat_ref_loc[1], stat_ref_loc[0], nb_stations-1)
+        #lons = np.array(l_coord.lons).astype(float)
+        #lons = np.r_[lons, stat_ref_loc[1]]
+        #lats = np.array(l_coord.lats).astype(float)
+        #lats = np.r_[lats, stat_ref_loc[0]]
+
+        az12, _, dist = wgs84_geod.inv(source_loc[1], source_loc[0], stat_ref_loc[1], stat_ref_loc[0])
+        lons, lats, azs = np.repeat(source_loc[1], nb_stations-1), np.repeat(source_loc[0], nb_stations-1), np.repeat(az12, nb_stations-1)
+        distances_nb_stations = np.linspace(simulation_domain['offset_xmin'], dist, nb_stations-1)
+        wgs84_geod = Geod(ellps='WGS84')
+        endlon, endlat, _ = wgs84_geod.fwd(lons, lats, azs, distances_nb_stations)
+        lons = endlon.astype(float)
+        lats = endlat.astype(float)
         lons = np.r_[lons, stat_ref_loc[1]]
-        lats = np.array(l_coord.lats).astype(float)
         lats = np.r_[lats, stat_ref_loc[0]]
-        
+    
         stations_update.loc[:, 'lat'] = lats
         stations_update.loc[:, 'lon'] = lons
         
@@ -1562,7 +1603,7 @@ def create_stations_at_given_altitude(source_dict, stations, altitudes, nb_stati
     stations_update_all.reset_index(drop=True, inplace=True)
     return stations_update_all
 
-def create_stations_along_surface(source_dict, stations, nb_stations=10, add_seismic=True, add_array_around_station=True, dx_array=100, nb_in_array=5, add_stations_based_on_angles=[], source_depth=100., nb_stations_based_on_angles=3):
+def create_stations_along_surface(source_dict, stations, simulation_domain, nb_stations=10, add_seismic=True, add_array_around_station=True, dx_array=100, nb_in_array=5, add_stations_based_on_angles=[], source_depth=100., nb_stations_based_on_angles=3):
 
     from pyproj import Geod
 
@@ -1583,10 +1624,17 @@ def create_stations_along_surface(source_dict, stations, nb_stations=10, add_sei
     source_loc = source_dict['lat'], source_dict['lon']
     stat_ref_loc = stations.iloc[0].lat, stations.iloc[0].lon
     wgs84_geod = Geod(ellps='WGS84')
-    l_coord = wgs84_geod.inv_intermediate(source_loc[1], source_loc[0], stat_ref_loc[1], stat_ref_loc[0], nb_stations-1)
-    
-    lons = np.array(l_coord.lons).astype(float)
-    lats = np.array(l_coord.lats).astype(float)
+    #l_coord = wgs84_geod.inv_intermediate(source_loc[1], source_loc[0], stat_ref_loc[1], stat_ref_loc[0], nb_stations-1)
+    #lons = np.array(l_coord.lons).astype(float)
+    #lats = np.array(l_coord.lats).astype(float)
+
+    az12, _, dist = wgs84_geod.inv(source_loc[1], source_loc[0], stat_ref_loc[1], stat_ref_loc[0])
+    lons, lats, azs = np.repeat(source_loc[1], nb_stations-1), np.repeat(source_loc[0], nb_stations-1), np.repeat(az12, nb_stations-1)
+    distances_nb_stations = np.linspace(simulation_domain['offset_xmin'], dist, nb_stations-1)
+    wgs84_geod = Geod(ellps='WGS84')
+    endlon, endlat, _ = wgs84_geod.fwd(lons, lats, azs, distances_nb_stations)
+    lons = endlon.astype(float)
+    lats = endlat.astype(float)
     
     stations_update.loc[stations_update.index<nb_stations-1, 'lat'] = lats
     stations_update.loc[stations_update.index<nb_stations-1, 'lon'] = lons
@@ -1610,7 +1658,6 @@ def create_stations_along_surface(source_dict, stations, nb_stations=10, add_sei
         stations_array.loc[:, 'lat'] = endlat
         stations_array.loc[:, 'lon'] = endlon
         
-        #stations_update = stations_update.append( stations_array )
         stations_update = pd.concat([stations_update, stations_array] )
         
     if add_stations_based_on_angles:
@@ -1632,10 +1679,6 @@ def create_stations_along_surface(source_dict, stations, nb_stations=10, add_sei
         stations_array.loc[:, 'lat'] = endlat
         stations_array.loc[:, 'lon'] = endlon
         
-        #print(az12)
-        #print(wgs84_geod.inv(lons, lats, endlon, endlat))
-        
-        #stations_update = stations_update.append( stations_array )
         stations_update = pd.concat([stations_update, stations_array] )
         
     stations_update.reset_index(drop=True, inplace=True)
@@ -1643,7 +1686,7 @@ def create_stations_along_surface(source_dict, stations, nb_stations=10, add_sei
      
 def load_stf(dt, nstep, file='/staff/quentin/Documents/Projects/Kiruna/Celso_data/20200518011156000_crust1se_001_stf.txt', offset_time=0.):
 
-    stf_orig = pd.read_csv(file, delim_whitespace=True, header=None, names=['t', 'amp'])
+    stf_orig = pd.read_csv(file, sep=r'\s+', header=None, names=['t', 'amp'])
     f = interpolate.interp1d(stf_orig.t.values, stf_orig.amp.values, fill_value="extrapolate")
     
     
@@ -1682,7 +1725,7 @@ def load_Kiruna_profiles_NCPA(file):
     Read atmospheric profiles provided by Alexis Le Pichon on 30/04/2021
     """
     
-    model = pd.read_csv(file, delim_whitespace=True, header=None)
+    model = pd.read_csv(file, sep=r'\s+', header=None)
     model.columns = ['z', 't', 'u', 'v', 'rho', 'p']
     model['z']   *= 1e3
     model['rho'] *= 1e3
@@ -1698,7 +1741,7 @@ def load_Kiruna_profiles_Alexis(file):
     Read atmospheric profiles provided by Alexis Le Pichon on 30/04/2021
     """
     
-    model = pd.read_csv(file, delim_whitespace=True, header=None)
+    model = pd.read_csv(file, sep=r'\s+', header=None)
     model.columns = ['z', 'u', 'v', 'w', 't', 'rho', 'p']
     model['z']   *= 1e3
     model['rho'] *= 1e3
@@ -1714,7 +1757,7 @@ def load_SPECFEM_profile(file, deactivate_attenuation=False):
     Read atmospheric profiles used in SPECFEM
     """
     
-    model = pd.read_csv(file, delim_whitespace=True, header=[0])
+    model = pd.read_csv(file, sep=r'\s+', header=[0])
     model.columns = ['z','rho','t','c','p','n/a','g','n/a.1','kappa','mu','n/a.2','v','u','w_proj[m/s]','cp','cv','gamma[1]','fr[Hz]','Svib[1]','kappa1','taus','taue','taus_new','taue_new']
     if deactivate_attenuation:
         model['kappa'] = 0.
@@ -1724,17 +1767,26 @@ def load_SPECFEM_profile(file, deactivate_attenuation=False):
 
     return model[['z', 't', 'u', 'v', 'rho', 'p', 'c', 'g', 'kappa', 'mu', 'cp', 'cv', 'taue', 'taus']]
 
-def read_venus_topography(file, lat_ev, lon_ev, lat_stat, lon_stat, offset_x, R0=6052000):
+def read_venus_topography(file, lat_ev, lon_ev, lat_stat, lon_stat, offset_x, offset_topo_and_vel_with_source, R0=6052000, dir='NS', cols=['position', 'topo'], unit='km', flat_topo_left_domain=True, add_offset=100e3):
 
     topo = pd.read_csv(file, header=[0])
-    R = topo['position'].values*1e3
-    R = np.r_[-10*offset_x, R]
+    if 'dir' in topo.columns:
+        topo = topo.loc[topo.dir==dir]
+    topo.columns = cols
+
+    if unit == 'km':
+        topo.loc[:,'topo'] *= 1e3
+
+    R = topo['position'].values*1e3 - offset_topo_and_vel_with_source
+    topo_data = topo['topo'].values
+    if flat_topo_left_domain:
+        R = np.r_[R.min()-10*add_offset, R]
+        topo_data = np.r_[topo_data[0], topo_data]
     g = Geod(proj='robin', lat_0=0., lon_0=0., a=R0, b=R0) 
-    topo_data = topo['Magellan Global Topography'].values
-    topo_data = np.r_[topo_data[0], topo_data]
     az12, _, _ = g.inv(lon_ev, lat_ev, lon_stat, lat_stat)
     lons, lats = np.repeat(lon_ev, topo_data.size), np.repeat(lat_ev, topo_data.size)
     angles = np.repeat(az12, topo_data.size)
+
     endlon, endlat, _ = g.fwd(lons, lats, angles, R)
     
     topo = pd.DataFrame(np.c_[endlon, endlat, topo_data, R], columns=['lon', 'lat', 'topo', 'R'])
@@ -1757,5 +1809,28 @@ def build_venus_model(file, vs_crust=3.5, vp_crust=6., rho_crust=2.8, Qp_crust=1
     velocity_model_mantle.loc[:,'Qs'] = Qs_mantle
     velocity_model = pd.concat([velocity_model, velocity_model_mantle])
     velocity_model.reset_index(drop=True, inplace=True)
+
+    return velocity_model
+
+def load_venus_model(file, file_crustal_change=None):
+
+    model = pd.read_csv(file, header=None, names=['z', 'vp', 'vs', 'rho', 'Qp', 'Qs'])
+    crust = pd.read_csv(file_crustal_change, header=[0])
+    dists, thickness = crust['position'].values, crust['Crustal Thickness'].values
+
+    """
+    #distance         h      depth       vs        vp       rho     Qs           Qp
+    velocity_model = pd.DataFrame(np.c_[dists*1e3, thickness*1e3, thickness*1e3, np.zeros_like(thickness)+vs_crust, np.zeros_like(thickness)+vp_crust, np.zeros_like(thickness)+rho_crust, np.zeros_like(thickness)+Qs_crust, np.zeros_like(thickness)+Qp_crust], columns=['distance', 'h', 'depth', 'vs', 'vp', 'rho', 'Qs', 'Qp'])
+    velocity_model_mantle = velocity_model.copy()
+    velocity_model_mantle.loc[:,'depth'] += h_mantle*1e3
+    velocity_model_mantle.loc[:,'thickness'] = h_mantle*1e3
+    velocity_model_mantle.loc[:,'vs'] = vs_mantle
+    velocity_model_mantle.loc[:,'vp'] = vp_mantle
+    velocity_model_mantle.loc[:,'rho'] = rho_mantle
+    velocity_model_mantle.loc[:,'Qp'] = Qp_mantle
+    velocity_model_mantle.loc[:,'Qs'] = Qs_mantle
+    velocity_model = pd.concat([velocity_model, velocity_model_mantle])
+    velocity_model.reset_index(drop=True, inplace=True)"
+    """
 
     return velocity_model

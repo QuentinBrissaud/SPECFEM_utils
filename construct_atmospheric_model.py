@@ -296,7 +296,7 @@ def run_MSISHWM_wrapper(location, date_UTC, zmax, N, file_sw='/projects/active/i
         code = os.system(os.path.abspath(os.path.expanduser(cmd_windows)))
     
     ## Read output file
-    msishwm = pd.read_csv(output, skiprows=[0,1], header=[0], delim_whitespace=True)
+    msishwm = pd.read_csv(output, skiprows=[0,1], header=[0], sep=r'\s+')
     msishwm['wx'] = msishwm['w_M[m/s]']
     msishwm = msishwm[['z[m]', 'T[K]', 'wx', 'w_Z[m/s]', 'w_M[m/s]', 'rho[kg/(m^3)]', 'p[Pa]', 'c[m/s]', 'g[m/(s^2)]']]
     msishwm.columns = ['z', 't', 'wx', 'u', 'v', 'rho', 'p', 'c', 'g']
@@ -561,7 +561,7 @@ class atmos_model():
         if self.type_input_file == 'ecmwf':
             self.lats, self.lons, self.heights, self.levels, self.times, self.zonal, self.meridonial, self.temperature = read_one_netcdf(self.input_file)
         elif self.type_input_file == 'ncpa':
-            atmos_model = pd.read_csv(os.path.abspath(os.path.expanduser(self.input_file)), skiprows=13, header=None, delim_whitespace=True, names=['z', 't', 'u', 'v', 'rho', 'p'])
+            atmos_model = pd.read_csv(os.path.abspath(os.path.expanduser(self.input_file)), skiprows=13, header=None, sep=r'\s+', names=['z', 't', 'u', 'v', 'rho', 'p'])
             self.lats = np.array([self.source[0]])
             self.lons = np.array([self.source[0]])
             self.heights = atmos_model.z.values*1e3

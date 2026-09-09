@@ -610,7 +610,7 @@ def create_one_waveform(folder_waveform, file_waveform, l_stations,
                         stf={'type': 'gaussian', 'f0': 1.,}):
     
     waveform_file= f'{folder_waveform}/{base_output_folder}/{file_waveform}'
-    waveform_data = pd.read_csv(waveform_file, header=None, delim_whitespace=True)
+    waveform_data = pd.read_csv(waveform_file, header=None, sep=r'\s+')
     waveform_data.columns = ['time', 'data']  
     dt = waveform_data.time.iloc[1]-waveform_data.time.iloc[0]
     
@@ -708,7 +708,7 @@ def create_waveforms(folder_waveform, file_waveform,
         folder_waveform_loc = folders_combine_mt_loc[mt]
 
         station_file = f'{folder_waveform_loc}/DATA/STATIONS'
-        l_stations = pd.read_csv(station_file, delim_whitespace=True, header=None)
+        l_stations = pd.read_csv(station_file, sep=r'\s+', header=None)
         l_stations.columns = ['station', 'network', 'x', 'z', 'dummy0', 'dummy1']
 
         nb_files = 0

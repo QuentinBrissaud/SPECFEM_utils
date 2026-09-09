@@ -1,8 +1,76 @@
 # convert mesh to specfem format
 import numpy as np
-import numba
 import time
 import os
+
+try:
+    import numba
+except ModuleNotFoundError:
+    class _NumbaFallback:
+        def jit(self, *args, **kwargs):
+            def decorator(func):
+                return func
+            return decorator
+
+    numba = _NumbaFallback()
+
+
+def validate_quad_arrays(points, quads, max_edge_length=None):
+    """
+    Validate quadrilateral connectivity against node coordinates.
+
+    Returns a report dictionary. The caller decides whether to raise, print, or
+    write the report to disk.
+    """
+
+    points = np.asarray(points)[:, 0:2]
+    quads = np.asarray(quads)[:, 0:4]
+    quad_points = points[quads]
+
+    shifted = np.roll(quad_points, -1, axis=1)
+    signed_areas = 0.5 * np.sum(
+        quad_points[:, :, 0] * shifted[:, :, 1]
+        - shifted[:, :, 0] * quad_points[:, :, 1],
+        axis=1,
+    )
+    bad_area = np.where(signed_areas <= 0.0)[0]
+
+    edge_lengths = np.linalg.norm(quad_points - shifted, axis=2)
+    max_edge_by_quad = np.max(edge_lengths, axis=1)
+    if max_edge_length is None:
+        bad_edges = np.array([], dtype=int)
+    else:
+        bad_edges = np.where(max_edge_by_quad > max_edge_length)[0]
+
+    return {
+        "points": points,
+        "quads": quads,
+        "quad_points": quad_points,
+        "signed_areas": signed_areas,
+        "edge_lengths": edge_lengths,
+        "max_edge_by_quad": max_edge_by_quad,
+        "bad_area": bad_area,
+        "bad_edges": bad_edges,
+        "max_edge_length": max_edge_length,
+    }
+
+
+def format_quad_validation_report(report):
+    msg = [
+        "Invalid quadrilateral mesh generated for SPECFEM.",
+        f"  negative/zero-area quads: {report['bad_area'].size}",
+        f"  overlong-edge quads: {report['bad_edges'].size}",
+    ]
+    if report["bad_area"].size:
+        i = report["bad_area"][0]
+        msg.append(f"  first bad-area quad index: {i}, nodes: {report['quads'][i].tolist()}")
+        msg.append(f"  first bad-area coordinates: {report['quad_points'][i].tolist()}")
+    if report["bad_edges"].size:
+        i = report["bad_edges"][0]
+        msg.append(f"  first overlong-edge quad index: {i}, max edge: {np.max(report['edge_lengths'][i])}")
+        msg.append(f"  first overlong-edge coordinates: {report['quad_points'][i].tolist()}")
+    return "\n".join(msg)
+
 
 @numba.jit(nopython=True)
 def get_cpml_cells_except_damping(
@@ -228,6 +296,25 @@ class Meshio2Specfem2D:
         with open(self.fname_Nodes, "w") as f:
             f.write(f"{self.n_nodes}\n")
             np.savetxt(f, nodes[:,0:2], fmt="%f %f")
+
+    def validate_quad_geometry(self, max_edge_length=None):
+        """
+        Fail early if the mesh contains inverted or obviously scrambled quads.
+
+        SPECFEM will stop later on negative Jacobians, but checking here gives a
+        clearer error at mesh-generation time and catches long-range node
+        stitching before the external mesh files are written.
+        """
+
+        if self.key_quad not in self.mesh.cells_dict:
+            raise ValueError(f"Mesh does not contain '{self.key_quad}' cells")
+
+        points = self.mesh.points[:, 0:2]
+        quads = self.mesh.cells_dict[self.key_quad][:, 0:4]
+        report = validate_quad_arrays(points, quads, max_edge_length=max_edge_length)
+
+        if report["bad_area"].size or report["bad_edges"].size:
+            raise ValueError(format_quad_validation_report(report))
 
 
     def write_mesh(self):

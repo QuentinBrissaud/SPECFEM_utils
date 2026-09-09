@@ -232,8 +232,14 @@ class rectangles:
                             print("Error: topo is not set. Set topo as a dictionary with x and z keys")
                             sys.exit()
 
-                        #try:
-                        p_list = [geom.add_point((x, z, 0), rect.list_lc[2]) for x, z in zip(x_arr, y_arr)]
+                        # x_arr/y_arr are built with linspace and already include
+                        # both endpoints. Reusing the rectangle corner points keeps
+                        # the shared boundary exact and avoids duplicate spline
+                        # endpoints that can confuse quad recombination.
+                        x_arr = np.asarray(x_arr)
+                        y_arr = np.asarray(y_arr)
+                        p_list = [geom.add_point((x, z, 0), rect.list_lc[2])
+                                  for x, z in zip(x_arr[1:-1], y_arr[1:-1])]
                         p_list = p_list[::-1]
                         # add p3 and p4 to the list
                         p_list.insert(0, rect.list_points[2])
@@ -447,11 +453,11 @@ class one_rect:
                 print("Error: nelm_h or nelm_v is not set")
                 sys.exit()
             if self.nelm_h is not None:
-                geom.set_transfinite_curve(self.list_lines[0], self.nelm_h[0], "Progression", 1.0)
-                geom.set_transfinite_curve(self.list_lines[2], self.nelm_h[1], "Progression", 1.0)
+                geom.set_transfinite_curve(abs(self.list_lines[0]), self.nelm_h[0], "Progression", 1.0)
+                geom.set_transfinite_curve(abs(self.list_lines[2]), self.nelm_h[1], "Progression", 1.0)
             if self.nelm_v is not None:
-                geom.set_transfinite_curve(self.list_lines[1], self.nelm_v[1], "Progression", 1.0)
-                geom.set_transfinite_curve(self.list_lines[3], self.nelm_v[0], "Progression", 1.0)
+                geom.set_transfinite_curve(abs(self.list_lines[1]), self.nelm_v[1], "Progression", 1.0)
+                geom.set_transfinite_curve(abs(self.list_lines[3]), self.nelm_v[0], "Progression", 1.0)
 
         # transfinite surface
         if self.transfinite:# or self.transfinite_1d:

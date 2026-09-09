@@ -2,7 +2,10 @@ import numpy as np
 import sys
 from pdb import set_trace as bp
 from scipy import interpolate
-from scipy.signal import tukey
+try:
+    from scipy.signal.windows import tukey
+except ImportError:
+    from scipy.signal import tukey
 
 ## SPECFEM external mesh conversion
 #folder = '../'
@@ -123,6 +126,17 @@ def fix_mesh_size(xmin, xmax, lc_g):
 
         return xmin_new, xmax_new
 
+def _transfinite_node_count(length, target_size):
+
+    n_elements = max(2, int(round(abs(length) / target_size)))
+    n_nodes = n_elements + 1
+
+    # Gmsh's quad recombination is happier with an even number of intervals.
+    if (n_nodes - 1) % 2 != 0:
+        n_nodes += 1
+
+    return n_nodes
+
 def create_mesh_pygmsh(zmin, zmax, dists, topo, simulation_folder, lc_w, lc_g, factor_transition_zone=10., factor_pml_lc_g=10., use_cpml=True, save_mesh_file=False, alpha_taper=0.25):
     
     """
@@ -133,7 +147,10 @@ def create_mesh_pygmsh(zmin, zmax, dists, topo, simulation_folder, lc_w, lc_g, f
     import pygmsh
     import gmsh
     import meshio2spec2d
-    gmsh.initialize()
+    if gmsh.isInitialized():
+        gmsh.clear()
+    else:
+        gmsh.initialize()
 
     xmin, xmax = dists.min(), dists.max()
     xmin, xmax = fix_mesh_size(xmin, xmax, lc_g)
@@ -142,12 +159,15 @@ def create_mesh_pygmsh(zmin, zmax, dists, topo, simulation_folder, lc_w, lc_g, f
     lc_pml = min(lc_w, lc_g)
     w_pml = lc_pml*factor_pml_lc_g
     H_t = lc_g*factor_transition_zone # width of transition layer
-    nelm_h_g = int(L / lc_g) 
-    nelm_h_w = int(L / lc_w) 
 
     lc_b = min(lc_w, lc_g) # element size at boundary
     H_w = abs(zmax)  # water depth in meter
     H_g = abs(zmin)  # subsurface depth in meter
+    nelm_h_g = _transfinite_node_count(L, lc_g)
+    nelm_h_w = _transfinite_node_count(L, lc_w)
+    nelm_v_g = _transfinite_node_count(H_g - H_t, lc_g)
+    nelm_v_t = _transfinite_node_count(H_t, min(lc_g, lc_w))
+    nelm_v_w = _transfinite_node_count(H_w, lc_w)
 
     n_points = int(L / lc_b)
     taper = tukey(n_points, alpha=alpha_taper)
@@ -195,9 +215,12 @@ def create_mesh_pygmsh(zmin, zmax, dists, topo, simulation_folder, lc_w, lc_g, f
 
         # create rectangles
         whole_domain = cp.rectangles(geom)
-        whole_domain.add_one_rect(geom, p1, p2, p3t, p4t, lc_g, transfinite=True, mat_tag="M1", nelm_h=nelm_h_g ,topo=topo_t)
-        whole_domain.add_one_rect(geom, p4t, p3t, p3, p4, [lc_g, lc_g, lc_w, lc_w], transfinite=False, mat_tag="M1", topo=topo)
-        whole_domain.add_one_rect(geom, p4, p3, p6, p5, lc_w, transfinite=True, nelm_h=nelm_h_w, mat_tag="M2")
+        whole_domain.add_one_rect(geom, p1, p2, p3t, p4t, lc_g, transfinite=True, mat_tag="M1",
+                                  nelm_h=nelm_h_g, nelm_v=nelm_v_g, topo=topo_t)
+        whole_domain.add_one_rect(geom, p4t, p3t, p3, p4, [lc_g, lc_g, lc_w, lc_w], transfinite=False,
+                                  mat_tag="M1", nelm_v=nelm_v_t, topo=topo)
+        whole_domain.add_one_rect(geom, p4, p3, p6, p5, lc_w, transfinite=False, nelm_h=nelm_h_w,
+                                  nelm_v=nelm_v_w, mat_tag="M2")
 
         # create pml layer
         if use_cpml:
@@ -217,6 +240,7 @@ def create_mesh_pygmsh(zmin, zmax, dists, topo, simulation_folder, lc_w, lc_g, f
             mesh.write(f"{simulation_folder}/mesh.msh", file_format="gmsh22")
 
     mio2spec = meshio2spec2d.Meshio2Specfem2D(mesh, outdir=f"{simulation_folder}/EXTMSH")
+    mio2spec.validate_quad_geometry(max_edge_length=3.0 * max(lc_w, lc_g))
     mio2spec.write(f"extMesh")
 
     return xmin, xmax, nelm_h_g, nelm_h_w, zmin, zmax, topo['x'], topo['z']
