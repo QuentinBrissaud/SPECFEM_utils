@@ -1,6 +1,13 @@
 import pygmsh
 import numpy as np
+import numbers
 import sys
+
+
+def _transfinite_curve(curve):
+    if isinstance(curve, numbers.Integral):
+        return abs(curve)
+    return curve
 
 class line_store:
     def __init__(self, rect_id, line_id, point_ids):
@@ -453,11 +460,11 @@ class one_rect:
                 print("Error: nelm_h or nelm_v is not set")
                 sys.exit()
             if self.nelm_h is not None:
-                geom.set_transfinite_curve(abs(self.list_lines[0]), self.nelm_h[0], "Progression", 1.0)
-                geom.set_transfinite_curve(abs(self.list_lines[2]), self.nelm_h[1], "Progression", 1.0)
+                geom.set_transfinite_curve(_transfinite_curve(self.list_lines[0]), self.nelm_h[0], "Progression", 1.0)
+                geom.set_transfinite_curve(_transfinite_curve(self.list_lines[2]), self.nelm_h[1], "Progression", 1.0)
             if self.nelm_v is not None:
-                geom.set_transfinite_curve(abs(self.list_lines[1]), self.nelm_v[1], "Progression", 1.0)
-                geom.set_transfinite_curve(abs(self.list_lines[3]), self.nelm_v[0], "Progression", 1.0)
+                geom.set_transfinite_curve(_transfinite_curve(self.list_lines[1]), self.nelm_v[1], "Progression", 1.0)
+                geom.set_transfinite_curve(_transfinite_curve(self.list_lines[3]), self.nelm_v[0], "Progression", 1.0)
 
         # transfinite surface
         if self.transfinite:# or self.transfinite_1d:
