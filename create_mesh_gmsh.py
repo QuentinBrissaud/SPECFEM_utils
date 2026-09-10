@@ -219,7 +219,7 @@ def create_mesh_pygmsh(zmin, zmax, dists, topo, simulation_folder, lc_w, lc_g, f
                                   nelm_h=nelm_h_g, nelm_v=nelm_v_g, topo=topo_t)
         whole_domain.add_one_rect(geom, p4t, p3t, p3, p4, [lc_g, lc_g, lc_w, lc_w], transfinite=False,
                                   mat_tag="M1", nelm_v=nelm_v_t, topo=topo)
-        whole_domain.add_one_rect(geom, p4, p3, p6, p5, lc_w, transfinite=False, nelm_h=nelm_h_w,
+        whole_domain.add_one_rect(geom, p4, p3, p6, p5, lc_w, transfinite=True, nelm_h=nelm_h_w,
                                   nelm_v=nelm_v_w, mat_tag="M2")
 
         # create pml layer
