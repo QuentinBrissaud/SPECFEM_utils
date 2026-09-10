@@ -30,7 +30,7 @@ class rectangles:
         self.dict_points_created = {}
         self.dict_lines_created = {}
 
-    def add_one_rect(self, geom, xy1, xy2, xy3, xy4, lc, nelm_h=None, nelm_v=None, topo=None,
+    def add_one_rect(self, geom, xy1, xy2, xy3, xy4, lc, nelm_h=None, nelm_v=None, topo=None, topo_edges=None,
                      transfinite=False, mat_tag=None):
         # add z component to the coordinates
         xy1 = (xy1[0], xy1[1], 0)
@@ -45,7 +45,7 @@ class rectangles:
         self.list_rects.append(one_rect(geom, self.n_rects, xy1, xy2, xy3, xy4, lc,
                                         transfinite=transfinite, transfinite_1d=transfinite_1d,
                                         mat_tag=mat_tag, nelm_h=nelm_h, nelm_v=nelm_v,
-                                        topo=topo))
+                                        topo=topo, topo_edges=topo_edges))
         self.n_rects += 1
 
     def add_one_rect_1d(self, geom, xy1, xy2, xy3, xy4, lc, nelm_h, nelm_v, transfinite=True,
@@ -228,31 +228,33 @@ class rectangles:
                     ipt = iline
                     ipt2 = (iline + 1) % 4 # point id is 0, 1, 2, 3
 
-                    if rect.topo is None or iline != 2: # topo only top line
+                    topo_edge = rect.get_topo_edge(iline)
+
+                    if topo_edge is None:
                         rect.list_lines[iline] = geom.add_line(rect.list_points[ipt], rect.list_points[ipt2])
-                    elif rect.topo is not None and iline == 2:
+                    else:
                         try:
                             # create a line with topology
-                            x_arr = rect.topo["x"]
-                            y_arr = rect.topo["z"]
+                            x_arr = topo_edge["x"]
+                            y_arr = topo_edge["z"]
                         except:
                             print("Error: topo is not set. Set topo as a dictionary with x and z keys")
                             sys.exit()
+
+                        x_arr = np.asarray(x_arr)
+                        y_arr = np.asarray(y_arr)
+                        if rect.list_xy[ipt][0] > rect.list_xy[ipt2][0]:
+                            x_arr = x_arr[::-1]
+                            y_arr = y_arr[::-1]
 
                         # x_arr/y_arr are built with linspace and already include
                         # both endpoints. Reusing the rectangle corner points keeps
                         # the shared boundary exact and avoids duplicate spline
                         # endpoints that can confuse quad recombination.
-                        x_arr = np.asarray(x_arr)
-                        y_arr = np.asarray(y_arr)
                         p_list = [geom.add_point((x, z, 0), rect.list_lc[2])
                                   for x, z in zip(x_arr[1:-1], y_arr[1:-1])]
-                        p_list = p_list[::-1]
-                        # add p3 and p4 to the list
-                        p_list.insert(0, rect.list_points[2])
-                        p_list.append(rect.list_points[3])
-                        #p_list[0] = rect.list_points[2]
-                        #p_list[-1] = rect.list_points[3]
+                        p_list.insert(0, rect.list_points[ipt])
+                        p_list.append(rect.list_points[ipt2])
                         rect.list_lines[iline] = geom.add_spline(p_list)
 
                         #except:
@@ -372,7 +374,7 @@ class one_rect:
     def __init__(self, geom, id_rect, xy1, xy2, xy3, xy4, lc,
                  transfinite=False, transfinite_1d=False,
                  nelm_h=None, nelm_v=None,
-                 mat_tag=None, pml_tag=None, bound_tag=None, topo=None, verbose=False):
+                 mat_tag=None, pml_tag=None, bound_tag=None, topo=None, topo_edges=None, verbose=False):
         # xy1, xy2, xy3, xy4: four corners of the rectangle
         # e.g. xy1 = (0,0,0) # dummy z
         # points should be placed as
@@ -414,8 +416,11 @@ class one_rect:
         # bound tag
         self.bound_tag = bound_tag
 
-        # topo: topology (top)
+        # topo: topology on the top edge; topo_edges may target any edge id.
         self.topo = topo
+        self.topo_edges = {} if topo_edges is None else topo_edges
+        if topo is not None:
+            self.topo_edges[2] = topo
 
         # lc: mesh size
         # if lc is a scalar, all points and lines are meshed with the same size
@@ -436,6 +441,9 @@ class one_rect:
             lc4 = lc[3]
 
         self.list_lc = [lc1, lc2, lc3, lc4]
+
+    def get_topo_edge(self, iline):
+        return self.topo_edges.get(iline)
 
 
     def create_surface(self, geom):
@@ -468,5 +476,5 @@ class one_rect:
 
         # transfinite surface
         if self.transfinite:# or self.transfinite_1d:
-            geom.set_transfinite_surface(self.ps, "Left", corner_pts=self.list_points)
+            geom.set_transfinite_surface(self.ps, corner_pts=self.list_points)
 
