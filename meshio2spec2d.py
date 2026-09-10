@@ -61,6 +61,8 @@ def format_quad_validation_report(report):
         f"  negative/zero-area quads: {report['bad_area'].size}",
         f"  overlong-edge quads: {report['bad_edges'].size}",
     ]
+    if report["max_edge_length"] is not None:
+        msg.append(f"  max edge length threshold: {report['max_edge_length']}")
     if report["bad_area"].size:
         i = report["bad_area"][0]
         msg.append(f"  first bad-area quad index: {i}, nodes: {report['quads'][i].tolist()}")

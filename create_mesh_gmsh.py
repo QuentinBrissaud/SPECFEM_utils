@@ -240,12 +240,14 @@ def create_mesh_pygmsh(zmin, zmax, dists, topo, simulation_folder, lc_w, lc_g, f
             mesh.write(f"{simulation_folder}/mesh.msh", file_format="gmsh22")
 
     mio2spec = meshio2spec2d.Meshio2Specfem2D(mesh, outdir=f"{simulation_folder}/EXTMSH")
+    max_edge_length = 20.0 * max(lc_w, lc_g)
+    print(f"Post-processing quadrilateral mesh: repair node order, validate max edge <= {max_edge_length}")
     mio2spec.repair_quad_node_order()
     # This threshold is a non-local stitching guard, not a mesh-quality target.
     # SPECFEM compatibility is enforced by the signed-area/Jacobian check above;
     # this catches the previous hundreds-of-km atmospheric quads without
     # rejecting ordinary PML/transition stretching.
-    mio2spec.validate_quad_geometry(max_edge_length=20.0 * max(lc_w, lc_g))
+    mio2spec.validate_quad_geometry(max_edge_length=max_edge_length)
     mio2spec.write(f"extMesh")
 
     return xmin, xmax, nelm_h_g, nelm_h_w, zmin, zmax, topo['x'], topo['z']
