@@ -476,5 +476,5 @@ class one_rect:
 
         # transfinite surface
         if self.transfinite:# or self.transfinite_1d:
-            geom.set_transfinite_surface(self.ps, corner_pts=self.list_points)
+            geom.set_transfinite_surface(self.ps, "AlternateLeft", corner_pts=self.list_points)
 
