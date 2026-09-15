@@ -31,7 +31,7 @@ class rectangles:
         self.dict_lines_created = {}
 
     def add_one_rect(self, geom, xy1, xy2, xy3, xy4, lc, nelm_h=None, nelm_v=None, topo=None, topo_edges=None,
-                     transfinite=False, mat_tag=None):
+                     transfinite=False, transfinite_arrangement="Left", mat_tag=None):
         # add z component to the coordinates
         xy1 = (xy1[0], xy1[1], 0)
         xy2 = (xy2[0], xy2[1], 0)
@@ -45,11 +45,12 @@ class rectangles:
         self.list_rects.append(one_rect(geom, self.n_rects, xy1, xy2, xy3, xy4, lc,
                                         transfinite=transfinite, transfinite_1d=transfinite_1d,
                                         mat_tag=mat_tag, nelm_h=nelm_h, nelm_v=nelm_v,
-                                        topo=topo, topo_edges=topo_edges))
+                                        topo=topo, topo_edges=topo_edges,
+                                        transfinite_arrangement=transfinite_arrangement))
         self.n_rects += 1
 
     def add_one_rect_1d(self, geom, xy1, xy2, xy3, xy4, lc, nelm_h, nelm_v, transfinite=True,
-                        mat_tag=None, pml_tag=None, bound_tag=None):
+                        mat_tag=None, pml_tag=None, bound_tag=None, transfinite_arrangement="Left"):
         # add z component to the coordinates
         xy1 = (xy1[0], xy1[1], 0)
         xy2 = (xy2[0], xy2[1], 0)
@@ -58,7 +59,8 @@ class rectangles:
 
         self.list_rects.append(one_rect(geom, self.n_rects, xy1, xy2, xy3, xy4, lc,
                                         nelm_h=nelm_h, nelm_v=nelm_v, transfinite=transfinite, transfinite_1d=transfinite,
-                                        mat_tag=mat_tag, pml_tag=pml_tag, bound_tag=bound_tag))
+                                        mat_tag=mat_tag, pml_tag=pml_tag, bound_tag=bound_tag,
+                                        transfinite_arrangement=transfinite_arrangement))
         self.n_rects += 1
 
 
@@ -374,7 +376,8 @@ class one_rect:
     def __init__(self, geom, id_rect, xy1, xy2, xy3, xy4, lc,
                  transfinite=False, transfinite_1d=False,
                  nelm_h=None, nelm_v=None,
-                 mat_tag=None, pml_tag=None, bound_tag=None, topo=None, topo_edges=None, verbose=False):
+                 mat_tag=None, pml_tag=None, bound_tag=None, topo=None, topo_edges=None,
+                 transfinite_arrangement="Left", verbose=False):
         # xy1, xy2, xy3, xy4: four corners of the rectangle
         # e.g. xy1 = (0,0,0) # dummy z
         # points should be placed as
@@ -395,6 +398,7 @@ class one_rect:
         self.ps = None # plane surface
         self.transfinite = transfinite
         self.transfinite_1d = transfinite_1d
+        self.transfinite_arrangement = transfinite_arrangement
 
         # if nelm_h or nelm_v is scalar, set those values for top and bottom lines
         if isinstance(nelm_h, (int, float)):
@@ -476,5 +480,5 @@ class one_rect:
 
         # transfinite surface
         if self.transfinite:# or self.transfinite_1d:
-            geom.set_transfinite_surface(self.ps, "AlternateLeft", corner_pts=self.list_points)
+            geom.set_transfinite_surface(self.ps, self.transfinite_arrangement, corner_pts=self.list_points)
 

@@ -105,6 +105,33 @@ def reorder_quad_nodes_counterclockwise(points, quads):
     return reordered
 
 
+def find_same_direction_shared_edges(quads):
+    edges = ((0, 1), (1, 2), (2, 3), (3, 0))
+    seen = {}
+    same_direction = []
+    nonmanifold = []
+
+    for iquad, quad in enumerate(np.asarray(quads)[:, 0:4]):
+        for iedge, (i0, i1) in enumerate(edges):
+            n0 = int(quad[i0])
+            n1 = int(quad[i1])
+            key = (n0, n1) if n0 < n1 else (n1, n0)
+            direction = (n0, n1)
+            if key not in seen:
+                seen[key] = [(iquad, iedge, direction)]
+                continue
+
+            previous = seen[key]
+            if len(previous) >= 2:
+                nonmanifold.append((key, previous + [(iquad, iedge, direction)]))
+            elif previous[0][2] == direction:
+                same_direction.append((key, previous[0], (iquad, iedge, direction)))
+
+            previous.append((iquad, iedge, direction))
+
+    return same_direction, nonmanifold
+
+
 @numba.jit(nopython=True)
 def get_cpml_cells_except_damping(
                 PML_X_elms_orig,
@@ -320,6 +347,14 @@ class Meshio2Specfem2D:
             self.key_line = "line"
             self.key_quad = "quad"
 
+        self._quad_data = None
+
+
+    def _get_quad_data(self):
+        if self._quad_data is not None:
+            return self._quad_data
+        return self.mesh.cells_dict[self.key_quad]
+
 
     def write_nodes(self):
         # number of nodes
@@ -343,11 +378,34 @@ class Meshio2Specfem2D:
             raise ValueError(f"Mesh does not contain '{self.key_quad}' cells")
 
         points = self.mesh.points[:, 0:2]
-        quads = self.mesh.cells_dict[self.key_quad][:, 0:4]
+        quads = self._get_quad_data()[:, 0:4]
         report = validate_quad_arrays(points, quads, max_edge_length=max_edge_length)
 
         if report["bad_area"].size or report["bad_edges"].size:
             raise ValueError(format_quad_validation_report(report))
+
+
+    def validate_quad_topology(self):
+        quads = self._get_quad_data()[:, 0:4]
+        same_direction, nonmanifold = find_same_direction_shared_edges(quads)
+        if not same_direction and not nonmanifold:
+            return
+
+        msg = [
+            "Invalid quadrilateral topology generated for SPECFEM.",
+            f"  same-direction shared edges: {len(same_direction)}",
+            f"  non-manifold shared edges: {len(nonmanifold)}",
+        ]
+        if same_direction:
+            key, first, second = same_direction[0]
+            msg.append(f"  first same-direction edge nodes: {list(key)}")
+            msg.append(f"  first quad index/local edge/direction: {first}")
+            msg.append(f"  second quad index/local edge/direction: {second}")
+        if nonmanifold:
+            key, uses = nonmanifold[0]
+            msg.append(f"  first non-manifold edge nodes: {list(key)}")
+            msg.append(f"  edge uses: {uses}")
+        raise ValueError("\n".join(msg))
 
 
     def repair_quad_node_order(self):
@@ -356,12 +414,12 @@ class Meshio2Specfem2D:
         """
 
         points = self.mesh.points[:, 0:2]
-        for cell_block in self.mesh.cells:
-            if cell_block.type == self.key_quad:
-                cell_block.data[:, 0:4] = reorder_quad_nodes_counterclockwise(
-                    points,
-                    cell_block.data[:, 0:4],
-                )
+        quad_data = self.mesh.cells_dict[self.key_quad].copy()
+        quad_data[:, 0:4] = reorder_quad_nodes_counterclockwise(
+            points,
+            quad_data[:, 0:4],
+        )
+        self._quad_data = quad_data
 
 
     def write_mesh(self):
@@ -369,7 +427,7 @@ class Meshio2Specfem2D:
         # node id1 id2 id3 id4 (id5 id6 id7 id8 id9 for second order elements)
 
         with open(self.fname_Mesh, "w") as f:
-            cell_data = self.mesh.cells_dict[self.key_quad] # id starts from 0
+            cell_data = self._get_quad_data() # id starts from 0
             self.n_cells = len(cell_data)
             f.write(str(self.n_cells) + "\n")
             if self.if_second_order:
@@ -418,7 +476,7 @@ class Meshio2Specfem2D:
         # pipline function to avoid passing dict to numba (unsupported)
 
         cells_line = self.mesh.cells_dict[self.key_line]
-        cells_quad = self.mesh.cells_dict[self.key_quad]
+        cells_quad = self._get_quad_data()
 
         return write_str_surface(cells_line, cells_quad, bound_edges, _node_ids, flag_abs)
 
@@ -517,7 +575,7 @@ class Meshio2Specfem2D:
             # concatenate a list of numpy arrays to one numpy array
             cells_line_inner_boundary = np.concatenate(_cells_inner_boundary)
 
-            cells_quad_total = self.mesh.cells_dict[self.key_quad]
+            cells_quad_total = self._get_quad_data()
             cells_line_total = self.mesh.cells_dict[self.key_line]
 
             cells_PML_X, cells_PML_Y, cells_PML_XY = get_cpml_cells_except_damping(
