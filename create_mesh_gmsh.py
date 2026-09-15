@@ -158,11 +158,22 @@ def create_mesh_pygmsh(zmin, zmax, dists, topo, simulation_folder, lc_w, lc_g, f
     L = abs(xmax-xmin)
     lc_pml = min(lc_w, lc_g)
     w_pml = lc_pml*factor_pml_lc_g
-    H_t = lc_g*factor_transition_zone # width of transition layer
 
     lc_b = min(lc_w, lc_g) # element size at boundary
     H_w = abs(zmax)  # water depth in meter
     H_g = abs(zmin)  # subsurface depth in meter
+    H_t_requested = lc_g*factor_transition_zone # width of transition layer
+    if H_g <= lc_g:
+        raise ValueError(
+            f"Subsurface depth zmin={zmin} leaves no room for a positive lower solid block "
+            f"with lc_g={lc_g}."
+        )
+    H_t = min(H_t_requested, H_g - lc_g)
+    if H_t != H_t_requested:
+        print(
+            f"Transition layer thickness capped from {H_t_requested} to {H_t} "
+            f"to avoid a degenerate lower solid mesh block."
+        )
     nelm_h_g = _transfinite_node_count(L, lc_g)
     nelm_h_w = _transfinite_node_count(L, lc_w)
     nelm_v_g = _transfinite_node_count(H_g - H_t, lc_g)
