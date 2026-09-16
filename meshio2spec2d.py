@@ -76,31 +76,26 @@ def format_quad_validation_report(report):
 
 def reorder_quad_nodes_counterclockwise(points, quads):
     """
-    Return first-order quads ordered counter-clockwise from the lower-left node.
+    Return first-order quads with positive orientation.
 
-    Gmsh can occasionally emit valid quadrilateral vertices in a cyclic order
-    that gives SPECFEM a negative Jacobian. This fixes node ordering only; it
-    does not hide non-local stitching because the geometry validator still runs
-    after reordering.
+    Gmsh's quad blocks already carry a globally consistent topology, so do not
+    sort every element independently. Only reverse elements that have negative
+    signed area; this fixes Jacobian orientation while preserving shared-edge
+    directions for the rest of the mesh.
     """
 
     points = np.asarray(points)[:, 0:2]
     quads = np.asarray(quads)
     reordered = quads.copy()
     quad_points = points[quads[:, 0:4]]
-    centers = np.mean(quad_points, axis=1)
-    angles = np.arctan2(
-        quad_points[:, :, 1] - centers[:, None, 1],
-        quad_points[:, :, 0] - centers[:, None, 0],
+    shifted = np.roll(quad_points, -1, axis=1)
+    signed_areas = 0.5 * np.sum(
+        quad_points[:, :, 0] * shifted[:, :, 1]
+        - shifted[:, :, 0] * quad_points[:, :, 1],
+        axis=1,
     )
-    order = np.argsort(angles, axis=1)
-    sorted_quads = np.take_along_axis(quads[:, 0:4], order, axis=1)
-    sorted_points = np.take_along_axis(quad_points, order[:, :, None], axis=1)
-
-    for i in range(sorted_quads.shape[0]):
-        # Use the left-most, then lowest, point as SPECFEM node 1.
-        start = np.lexsort((sorted_points[i, :, 1], sorted_points[i, :, 0]))[0]
-        reordered[i, 0:4] = np.roll(sorted_quads[i], -start)
+    bad = signed_areas <= 0.0
+    reordered[bad, 0:4] = reordered[bad][:, [0, 3, 2, 1]]
 
     return reordered
 

@@ -49,7 +49,7 @@ class rectangles:
                                         transfinite_arrangement=transfinite_arrangement))
         self.n_rects += 1
 
-    def add_one_rect_1d(self, geom, xy1, xy2, xy3, xy4, lc, nelm_h, nelm_v, transfinite=True,
+    def add_one_rect_1d(self, geom, xy1, xy2, xy3, xy4, lc, nelm_h, nelm_v, transfinite=False,
                         mat_tag=None, pml_tag=None, bound_tag=None, transfinite_arrangement="Left"):
         # add z component to the coordinates
         xy1 = (xy1[0], xy1[1], 0)
@@ -58,7 +58,7 @@ class rectangles:
         xy4 = (xy4[0], xy4[1], 0)
 
         self.list_rects.append(one_rect(geom, self.n_rects, xy1, xy2, xy3, xy4, lc,
-                                        nelm_h=nelm_h, nelm_v=nelm_v, transfinite=transfinite, transfinite_1d=transfinite,
+                                        nelm_h=nelm_h, nelm_v=nelm_v, transfinite=transfinite, transfinite_1d=True,
                                         mat_tag=mat_tag, pml_tag=pml_tag, bound_tag=bound_tag,
                                         transfinite_arrangement=transfinite_arrangement))
         self.n_rects += 1
