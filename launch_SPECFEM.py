@@ -12,6 +12,7 @@ import fluids
 from pyrocko import moment_tensor as mtm
 import pickle
 from pyproj import Geod
+from scipy.ndimage import gaussian_filter1d
 
 ## Custom libraries
 import construct_atmospheric_model, collect_topo, create_mesh_gmsh
@@ -636,11 +637,11 @@ def double_each_interface_for_2d(velocity_model, threshold=100.):
     updated_velocity_model = pd.DataFrame()
     for _, group in tqdm(velocity_model.groupby('distance')):
         new_group = group.iloc[1:].copy()
-        new_group.loc[:,'depth'] = group.iloc[:-1].depth+threshold
+        new_group.loc[:,'depth'] = group.iloc[:-1].depth.values+threshold
         new_group = pd.concat([group, new_group])
         new_group.sort_values(by='depth', inplace=True)
         updated_velocity_model = pd.concat([updated_velocity_model, new_group])
-
+       
         """
         new_group = group.iloc[:1]
         for idepth in range(1,group.shape[0]):
@@ -700,6 +701,7 @@ def construct_velocity_model(input_velocity_model, distance, profile, fit_vel_to
     columns = ['distance','depth','rho','vp','vs','Qp','Qs']
     velocity_model = input_velocity_model.loc[:, columns]
     velocity_model = double_each_interface_for_2d(velocity_model, threshold=100.)
+
 
     #velocity_model_.loc[velocity_model_.distance==velocity_model_.distance.min()]
     
@@ -1307,6 +1309,71 @@ class create_simulation():
         add_params_atmos_model(self.atmos_model)
         trim_model_topography(self.atmos_model, self.topography)
       
+def smooth_laterally(
+    df, *, x_range, depth_range, sigma,
+    columns=("vp", "vs", "rho"), taper=None
+):
+    """
+    sigma and taper use the same units as the 'distance' column.
+    Requires regularly spaced distances within each depth row.
+    """
+    if sigma <= 0:
+        raise ValueError("sigma must be positive")
+
+    result = df.copy()
+    xmin, xmax = x_range
+    zmin, zmax = depth_range
+    taper = 2 * sigma if taper is None else taper
+
+    for depth, row in df.groupby("depth"):
+        if not zmin <= depth <= zmax:
+            continue
+
+        row = row.sort_values("distance")
+        x = row["distance"].to_numpy()
+        if len(x) < 2:
+            continue
+
+        dx = np.diff(x)
+        if np.any(dx <= 0) or not np.allclose(dx, dx[0]):
+            raise ValueError(
+                f"Distances at depth {depth} must be unique and evenly spaced"
+            )
+
+        inside = (x >= xmin) & (x <= xmax)
+        if not inside.any():
+            continue
+
+        # Smoothing strength fades to zero at the region boundaries.
+        if taper > 0:
+            blend = np.clip(
+                np.minimum((x - xmin) / taper, (xmax - x) / taper),
+                0, 1
+            )
+            blend = blend * blend * (3 - 2 * blend)
+        else:
+            blend = inside.astype(float)
+
+        for column in columns:
+            y = row[column].to_numpy(dtype=float)
+            valid = np.isfinite(y)
+
+            # Normalized filtering avoids spreading NaNs.
+            numerator = gaussian_filter1d(
+                np.where(valid, y, 0.0), sigma / dx[0], mode="reflect"
+            )
+            denominator = gaussian_filter1d(
+                valid.astype(float), sigma / dx[0], mode="reflect"
+            )
+
+            updated = y.copy()
+            use = inside & valid & (denominator > 1e-10)
+            smoothed = numerator[use] / denominator[use]
+            updated[use] = y[use] + blend[use] * (smoothed - y[use])
+            result.loc[row.index, column] = updated
+
+    return result
+
 def compute_hlayer_from_depth(seismic_model, unit_depth):
     
     """
@@ -1329,7 +1396,7 @@ def compute_hlayer_from_depth(seismic_model, unit_depth):
         
     return new_seismic_model
       
-def load_external_seismic_model(seismic_model_path, offset_topo_and_vel_with_source, add_graves_attenuation=False, columns=['depth', 'vp', 'vs', 'rho'], unit_depth='km', remove_firstlayer=False, header=[0], delim_whitespace=True, add_h_to_cols=False):
+def load_external_seismic_model(seismic_model_path, offset_topo_and_vel_with_source, add_graves_attenuation=False, columns=['depth', 'vp', 'vs', 'rho'], unit_depth='km', remove_firstlayer=False, header=[0], delim_whitespace=True, add_h_to_cols=False, do_smooth_laterally=False, x_range=(-555e3, 19e3), depth_range=(0e3, 40e3), sigma=40e3,):
 
     """
     Format user seismic velocity model before creating simulation folder 
@@ -1373,7 +1440,12 @@ def load_external_seismic_model(seismic_model_path, offset_topo_and_vel_with_sou
         seismic_model['Qp'] = 2. * seismic_model['Qs'] * 1e3
 
     seismic_model.loc[:, 'distance'] -= offset_topo_and_vel_with_source
-      
+
+    if do_smooth_laterally:
+        seismic_model = smooth_laterally(seismic_model, x_range=x_range, depth_range=depth_range, sigma=sigma, columns=columns)
+
+    bp()
+
     return seismic_model
       
 """
