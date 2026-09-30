@@ -40,7 +40,18 @@ def write_params(file, params):
     ## Loop over each file line
     list_idx = params.index.tolist()
     cpt_writing = 0
+    skip_region_lines = False
     for line in lines:
+        stripped = line.strip()
+        if skip_region_lines:
+            tokens = stripped.split()
+            is_region_line = (
+                len(tokens) == 5
+                and all(token.lstrip('+-').isdigit() for token in tokens)
+            )
+            if is_region_line:
+                continue
+            skip_region_lines = False
     
         list_bool = [True if idx.strip() == line.split('=')[0].strip() else False for idx in list_idx]
         
@@ -52,9 +63,13 @@ def write_params(file, params):
         if(True in list_bool and not line[0] == '#'):
         
             try:
+                key = list_idx[list_bool.index(True)]
                 line_w = line.split('=')[1].split('#')[0]
                 break_line = '\n' if not '#' in line else ''
-                file_w.write(line.replace(line_w, ' ' + str(params.iloc[list_bool.index(True)].values[0]) + break_line))
+                file_w.write(line.replace(line_w, ' ' + str(params.loc[key].values[0]) + break_line))
+                if key == 'nbregions' and 'domain' in params.index:
+                    file_w.write(params.loc['domain'].values[0] + '\n')
+                    skip_region_lines = True
             except:
                 file_w.write(line) ## Lines of numbers are not changed
         else:
