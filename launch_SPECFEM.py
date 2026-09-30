@@ -41,6 +41,11 @@ def write_params(file, params):
     list_idx = params.index.tolist()
     cpt_writing = 0
     skip_region_lines = False
+    def _param_value(key, first_match):
+        if key == 'nbregions':
+            return params.loc[key].values[0]
+        return params.iloc[first_match].values[0]
+
     for line in lines:
         stripped = line.strip()
         if skip_region_lines:
@@ -66,7 +71,7 @@ def write_params(file, params):
                 key = list_idx[list_bool.index(True)]
                 line_w = line.split('=')[1].split('#')[0]
                 break_line = '\n' if not '#' in line else ''
-                file_w.write(line.replace(line_w, ' ' + str(params.loc[key].values[0]) + break_line))
+                file_w.write(line.replace(line_w, ' ' + str(_param_value(key, list_bool.index(True))) + break_line))
                 if key == 'nbregions' and 'domain' in params.index:
                     file_w.write(params.loc['domain'].values[0] + '\n')
                     skip_region_lines = True
