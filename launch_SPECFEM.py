@@ -1311,7 +1311,7 @@ class create_simulation():
       
 def smooth_laterally(
     df, *, x_range, depth_range, sigma,
-    columns=("vp", "vs", "rho"), taper=None
+    columns=("vp", "vs", "rho"), taper=0.1,
 ):
     """
     sigma and taper use the same units as the 'distance' column.
@@ -1326,7 +1326,7 @@ def smooth_laterally(
     taper = 2 * sigma if taper is None else taper
 
     for depth, row in df.groupby("depth"):
-        if not zmin <= depth <= zmax:
+        if not (zmin <= depth <= zmax):
             continue
 
         row = row.sort_values("distance")
@@ -1353,6 +1353,7 @@ def smooth_laterally(
             blend = blend * blend * (3 - 2 * blend)
         else:
             blend = inside.astype(float)
+            #bp()
 
         for column in columns:
             y = row[column].to_numpy(dtype=float)
@@ -1370,6 +1371,8 @@ def smooth_laterally(
             use = inside & valid & (denominator > 1e-10)
             smoothed = numerator[use] / denominator[use]
             updated[use] = y[use] + blend[use] * (smoothed - y[use])
+            #plt.figure(); plt.plot(x, y); plt.plot(x, updated); plt.savefig('test.png')
+            #bp()
             result.loc[row.index, column] = updated
 
     return result
@@ -1442,9 +1445,7 @@ def load_external_seismic_model(seismic_model_path, offset_topo_and_vel_with_sou
     seismic_model.loc[:, 'distance'] -= offset_topo_and_vel_with_source
 
     if do_smooth_laterally:
-        seismic_model = smooth_laterally(seismic_model, x_range=x_range, depth_range=depth_range, sigma=sigma, columns=columns)
-
-    bp()
+        seismic_model = smooth_laterally(seismic_model, x_range=x_range, depth_range=depth_range, sigma=sigma, )
 
     return seismic_model
       
@@ -1490,6 +1491,9 @@ def plot_simulation_domain(simulation, file, n_depths=100, max_depth=200):
     """
     Plotting simulation domain
     """
+
+    #bp()
+    #plt.figure(); plt.scatter(seismic.distance.values, seismic.depth.values, seismic.vs.values); plt.savefig('test.png')
 
     ## Simulation setup parameters
     source = simulation.source
@@ -1553,7 +1557,8 @@ def plot_simulation_domain(simulation, file, n_depths=100, max_depth=200):
     cbar0 = plt.colorbar(sc_acoustic, cax=axcbar, extend='both')
     cbar0.ax.set_ylabel('Effective veloc. (km/s)', rotation=270, labelpad=16)
 
-    sc_seismic = ax.pcolormesh(distance/1e3, -depths_/1e3, field_seismic, zorder=1, cmap=cmap_seismic)
+    #sc_seismic = ax.pcolormesh(distance/1e3, -depths_/1e3, field_seismic, zorder=1, cmap=cmap_seismic)
+    sc_seismic = ax.scatter(seismic.distance.values/1e3, -seismic.depth.values/1e3, c=seismic.vs.values, zorder=1, cmap=cmap_seismic)
     axcbar = inset_axes(ax, width="2%", height="45%", loc='lower left', bbox_to_anchor=(1.02, 0., 1, 1.), bbox_transform=ax.transAxes, borderpad=0)
     axcbar.tick_params(axis='both', which='both', labelbottom=False, labelleft=False, bottom=False, left=False)
     cbar0 = plt.colorbar(sc_seismic, cax=axcbar, extend='both')
